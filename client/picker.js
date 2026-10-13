@@ -125,6 +125,9 @@
   var picking = false;
   var target = null;
   var shots = [];
+  // Set when a pick commits on pointerdown; swallows the follow-up click so the
+  // page (links, buttons) never reacts to the click that finished the pick.
+  var swallowClick = false;
 
   document.documentElement.appendChild(host);
 
@@ -288,13 +291,32 @@
     showHighlight(el);
   }
 
-  function onClick(e) {
+  /**
+   * Commit the pick on `pointerdown`, not `click`: disabled form controls never
+   * dispatch `click` (so they could never be picked), but `pointerdown` still
+   * fires on them with the correct target.
+   */
+  function onPointerDown(e) {
+    if (e.button !== 0) return;
     var el = elFromEvent(e);
     if (!el) return;
     e.preventDefault();
     e.stopPropagation();
+    // preventDefault above only cancels the compat mousedown/mouseup, not the
+    // click, so flag it for the one-shot click swallower below. The flag is
+    // cleared at the start of every pointerdown (see the always-on listener at
+    // the bottom), so it can never strand on a disabled target — which fires
+    // pointerdown but no click at all — and eat an unrelated later click.
+    swallowClick = true;
     setPicking(false);
     select(el);
+  }
+
+  function onClick(e) {
+    if (!swallowClick) return;
+    swallowClick = false;
+    e.preventDefault();
+    e.stopPropagation();
   }
 
   function onKey(e) {
@@ -311,11 +333,11 @@
     trigger.style.display = on ? 'none' : 'flex';
     if (on) {
       window.addEventListener('mousemove', onMove, true);
-      window.addEventListener('click', onClick, true);
+      window.addEventListener('pointerdown', onPointerDown, true);
       window.addEventListener('keydown', onKey, true);
     } else {
       window.removeEventListener('mousemove', onMove, true);
-      window.removeEventListener('click', onClick, true);
+      window.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('keydown', onKey, true);
       hideHighlight();
     }
@@ -561,6 +583,12 @@
         sendNowBtn.disabled = false;
       });
   }
+
+  // Always-on. The first one resets the swallow flag before `onPointerDown`
+  // runs (registered earlier, so same-node capture listeners fire in order);
+  // the second consumes the flag to cancel the click that finishes a pick.
+  window.addEventListener('pointerdown', function () { swallowClick = false; }, true);
+  window.addEventListener('click', onClick, true);
 
   trigger.addEventListener('click', function () {
     if (suppressClick) {
