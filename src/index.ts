@@ -1,6 +1,6 @@
 import type { Plugin } from 'vite';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
@@ -22,8 +22,43 @@ const REG_DIR = join(homedir(), '.pi', 'agent', 'pi-picker');
 /** URL prefix under which the picker client and discovery endpoint are served. */
 const ENDPOINT = '/__pi_picker__';
 
-/** Absolute path to the browser client that ships with this package. */
-const CLIENT_FILE = fileURLToPath(new URL('../client/picker.js', import.meta.url));
+/** Path to this package's own browser client, anchored at the plugin's install location. */
+const OWN_CLIENT_FILE = fileURLToPath(new URL('../client/picker.js', import.meta.url));
+
+/**
+ * Resolve the browser client to serve. Called per request, never cached.
+ *
+ * The plugin module is evaluated once when the dev server boots, so anything
+ * captured at module scope is frozen for the life of that process. Upgrading
+ * pi-ele-picker while a dev server is running therefore used to keep serving the
+ * old client forever: the frozen path still pointed at
+ * `node_modules/.pnpm/pi-ele-picker@<old>/...`, pnpm leaves that directory on
+ * disk, and the stale client was handed out silently — refreshing never helped.
+ *
+ * Resolving from the project root instead means the currently installed copy
+ * wins, with no server restart.
+ *
+ * Two traps this deliberately avoids:
+ *
+ * 1. Anchoring at `import.meta.url`. From inside `.../pi-ele-picker@<old>/dist/`
+ *    Node resolves `pi-ele-picker` straight back to that same old copy.
+ * 2. `require.resolve()`. Node memoises resolutions in `Module._pathCache` and
+ *    never invalidates them when `node_modules` changes underneath a running
+ *    process, which pins the first lookup forever — the same staleness, moved.
+ *
+ * So the lookup is a plain filesystem walk, mirroring Node's own node_modules
+ * search (upward from the project root, for workspace/monorepo layouts), and it
+ * falls back to this package's own copy when nothing matches.
+ */
+function resolveClientFile(projectRoot: string): string | null {
+  for (let dir = projectRoot; dir; ) {
+    const candidate = join(dir, 'node_modules', 'pi-ele-picker', 'client', 'picker.js');
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    dir = parent === dir ? '' : parent; // stop at the filesystem root
+  }
+  return existsSync(OWN_CLIENT_FILE) ? OWN_CLIENT_FILE : null;
+}
 
 export interface PiElePickerOptions {
   /**
@@ -100,14 +135,15 @@ export default function piElePicker(options: PiElePickerOptions = {}): Plugin {
         }
 
         if (url === '/picker.js') {
-          if (!existsSync(CLIENT_FILE)) {
+          const clientFile = resolveClientFile(server.config.root);
+          if (!clientFile) {
             res.statusCode = 404;
             res.end('pi-ele-picker client missing');
             return;
           }
           res.setHeader('content-type', 'text/javascript');
           res.setHeader('cache-control', 'no-store');
-          res.end(readFileSync(CLIENT_FILE));
+          res.end(readFileSync(clientFile));
           return;
         }
 
