@@ -1,6 +1,6 @@
 {
   "name": "pi-ele-picker",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Pick an element in your running page, describe the change, and send it to a pi session. Ships a Vite dev plugin (browser picker + discovery endpoint) and the matching pi bridge extension.",
   "type": "module",
   "license": "MIT",
