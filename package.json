@@ -1,0 +1,76 @@
+{
+  "name": "pi-ele-picker",
+  "version": "0.1.0",
+  "description": "Pick an element in your running page, describe the change, and send it to a pi session. Ships a Vite dev plugin (browser picker + discovery endpoint) and the matching pi bridge extension.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Lute",
+  "keywords": [
+    "vite",
+    "vite-plugin",
+    "pi",
+    "pi-package",
+    "element-picker",
+    "inspector",
+    "devtools",
+    "ai"
+  ],
+  "files": [
+    "dist",
+    "client",
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/pi-picker.ts"
+    ]
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "vite": ">=4"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "vite": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0",
+    "vite": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
