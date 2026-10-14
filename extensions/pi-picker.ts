@@ -17,6 +17,15 @@
  *   reply:   { ok: true, mode, inserted } | { ok: true, mode, submitted, queued? }
  *            | { ok: false, error }
  *
+ * Wire protocol (GET /status):
+ *   reply:   { ok: true, status: "running" | "queued" | "idle", idle, pending,
+ *              mode, sessionId, model, provider, pid, cwd, updatedAt }
+ *
+ * `/status` is polled by the browser picker to render a live session badge (the
+ * launcher dot + the panel status line). It has no token: any loopback-origin
+ * page may read it, but non-loopback browser origins are rejected so an arbitrary
+ * website cannot probe session metadata.
+ *
  * Two delivery modes:
  *   - default (submit falsy): pre-fill the current pi input editor for review.
  *   - submit: true:            deliver a real user turn immediately (queued as a follow-up
@@ -169,6 +178,58 @@ function compose(payload: PickPayload, imagePaths: string[]): string {
   return lines.join('\n');
 }
 
+interface SessionStatus {
+  ok: true;
+  /** Coarse state for the picker UI. */
+  status: 'running' | 'queued' | 'idle';
+  /** Whether the agent loop is idle (not streaming). */
+  idle: boolean;
+  /** Whether follow-up messages are queued behind the current run. */
+  pending: boolean;
+  mode: string | null;
+  sessionId: string | null;
+  model: string | null;
+  provider: string | null;
+  pid: number;
+  cwd: string;
+  updatedAt: number;
+}
+
+/**
+ * Snapshot the active session's live state for GET /status.
+ *
+ * Derivation is ordered so "busy" always wins: a session that is mid-run reads
+ * `running` even while follow-ups are queued; only an idle session with queued
+ * messages reports `queued`; everything else is `idle`.
+ */
+function sessionStatus(ctx: unknown): SessionStatus {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const c = ctx as any;
+  let idle = true;
+  let pending = false;
+  try {
+    if (c && typeof c.isIdle === 'function') idle = !!c.isIdle();
+    if (c && typeof c.hasPendingMessages === 'function') pending = !!c.hasPendingMessages();
+  } catch {
+    /* fall back to the idle/no-queue defaults */
+  }
+  const model = c && c.model ? c.model.name || c.model.id || null : null;
+  const provider = c && c.model ? c.model.provider ?? null : null;
+  return {
+    ok: true,
+    status: !idle ? 'running' : pending ? 'queued' : 'idle',
+    idle,
+    pending,
+    mode: c ? c.mode ?? null : null,
+    sessionId: c ? c.sessionId ?? null : null,
+    model,
+    provider,
+    pid: process.pid,
+    cwd: process.cwd(),
+    updatedAt: Date.now(),
+  };
+}
+
 export default function (pi: ExtensionAPI): void {
   const token = randomBytes(16).toString('hex');
   let server: Server | undefined;
@@ -246,6 +307,19 @@ export default function (pi: ExtensionAPI): void {
     if (req.method === 'GET' && url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true, pid: process.pid, cwd: process.cwd(), mode: activeCtx?.mode ?? null }));
+      return;
+    }
+
+    if (req.method === 'GET' && url === '/status') {
+      // Read-only and tokenless, so gate it on a loopback browser origin: reject a
+      // foreign page while still allowing no-Origin callers (curl, local scripts).
+      if (origin && !isLoopbackOrigin(origin)) {
+        res.writeHead(403, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'forbidden origin' }));
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(sessionStatus(activeCtx)));
       return;
     }
 

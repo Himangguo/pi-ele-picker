@@ -46,6 +46,23 @@
     '.trigger:hover { background: #4338ca; }',
     '.trigger.dragging { cursor: grabbing; }',
     '.trigger.active { background: #059669; }',
+    '.dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: #6b7280; transition: background-color .2s ease; }',
+    '.dot.st-running { background: #34d399; animation: pipulse 1.4s ease-out infinite; }',
+    '.dot.st-queued { background: #fbbf24; }',
+    '.dot.st-idle { background: #9a9aa5; }',
+    '.dot.st-offline { background: #f87171; }',
+    '.dot.st-unknown { background: #6b7280; }',
+    '.dot.st-off { background: transparent; box-shadow: inset 0 0 0 1.5px #6b7280; }',
+    '@keyframes pipulse { 0% { box-shadow: 0 0 0 0 rgba(52,211,153,.6); } 70% { box-shadow: 0 0 0 6px rgba(52,211,153,0); } 100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); } }',
+    '.session { display: flex; align-items: center; gap: 6px; padding: 8px 12px 0; color: #b9b9c2; font-size: 11px; }',
+    '.session .st { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
+    '.sw { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; cursor: pointer; color: #9a9aa5; }',
+    '.sw input { appearance: none; -webkit-appearance: none; width: 28px; height: 16px; margin: 0; border-radius: 999px; background: #34353d; position: relative; cursor: pointer; transition: background-color .15s ease; }',
+    '.sw input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #cfcfd6; transition: transform .15s ease; }',
+    '.sw input:checked { background: #4f46e5; }',
+    '.sw input:checked::after { transform: translateX(12px); background: #fff; }',
+    '.sw input:focus-visible { outline: 2px solid #4f46e5; outline-offset: 2px; }',
+    '.sw .sw-label { font-size: 11px; }',
     '.panel { position: fixed; width: 380px; max-width: calc(100vw - 36px); z-index: 2147483647; pointer-events: auto; background: #1b1c22; color: #e7e7ea; border: 1px solid #34353d; border-radius: 12px; box-shadow: 0 18px 48px rgba(0,0,0,.5); font-size: 13px; display: none; }',
     '.panel.open { display: block; }',
     '.hd { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #2b2c33; }',
@@ -96,7 +113,10 @@
   var trigger = document.createElement('button');
   trigger.className = 'trigger';
   trigger.type = 'button';
-  trigger.textContent = '🎯 pi 选择器';
+  var triggerDot = document.createElement('span');
+  triggerDot.className = 'dot st-off';
+  trigger.appendChild(triggerDot);
+  trigger.appendChild(document.createTextNode('pi picker'));
   trigger.title = '拖拽可移动 · 点击开始选择元素';
   root.appendChild(trigger);
 
@@ -104,6 +124,7 @@
   panel.className = 'panel';
   panel.innerHTML =
     '<div class="hd"><div class="title">元素修改</div><button class="close" type="button" title="关闭">✕</button></div>' +
+    '<div class="session"><span class="dot st-off"></span><span class="st">状态显示已关闭</span><label class="sw" title="每 3 秒同步一次 pi 会话状态；关闭后不再发起任何轮询请求"><input type="checkbox" class="status-toggle" /><span class="sw-label">状态</span></label></div>' +
     '<div class="meta"></div>' +
     '<textarea placeholder="描述你想要的修改，例如：把这个按钮改成圆角主色、增加 hover 效果…（可直接粘贴截图）"></textarea>' +
     '<div class="shots"></div>' +
@@ -113,6 +134,9 @@
   root.appendChild(panel);
 
   var metaEl = panel.querySelector('.meta');
+  var sessionDot = panel.querySelector('.session .dot');
+  var sessionText = panel.querySelector('.session .st');
+  var statusToggle = panel.querySelector('.status-toggle');
   var taEl = panel.querySelector('textarea');
   var shotsEl = panel.querySelector('.shots');
   var statusEl = panel.querySelector('.status');
@@ -638,5 +662,134 @@
     readFiles(e.dataTransfer && e.dataTransfer.files);
   });
 
-  loadConfig();
+  // --- live session status (opt-in) ----------------------------------------
+  // Polling is OFF by default because each cycle opens a loopback connection.
+  // Users opt in per browser with the panel switch, or a project flips the
+  // default with the Vite option (`piElePicker({ status: true })`). While enabled
+  // the launcher dot + panel line show whether pi is running, waiting for input,
+  // holding queued follow-ups, or gone. Polling pauses on a hidden tab and drops
+  // a stale port so the next cycle re-discovers a restarted bridge.
+  var STATUS_INTERVAL = 3000;
+  var STATUS_KEY = 'pi-ele-picker:status:v1';
+  var statusTimer = null;
+  var statusTitle = '';
+  var statusEnabled = false;
+  var STATUS_LABEL = {
+    running: 'pi 执行中',
+    queued: 'pi 排队中',
+    idle: 'pi 等待输入',
+    offline: 'pi 已停止 / 未连接',
+    unknown: 'pi 状态检测中…',
+    off: '状态显示已关闭',
+  };
+
+  function renderStatus(info) {
+    var st = info && info.status;
+    if (!STATUS_LABEL[st]) st = 'unknown';
+    var cls = 'dot st-' + st;
+    triggerDot.className = cls;
+    sessionDot.className = cls;
+    var detail = [];
+    if (info && info.model) detail.push(info.model);
+    if (info && info.sessionId) detail.push('会话 ' + String(info.sessionId).slice(0, 8));
+    var line = STATUS_LABEL[st] + (detail.length ? ' · ' + detail.join(' · ') : '');
+    sessionText.textContent = line;
+    var title = line + ' · 拖拽可移动 · 点击开始选择元素';
+    if (title !== statusTitle) {
+      trigger.title = title;
+      statusTitle = title;
+    }
+  }
+
+  function readStatusOverride() {
+    try {
+      var v = localStorage.getItem(STATUS_KEY);
+      if (v === 'on') return true;
+      if (v === 'off') return false;
+    } catch (e) {
+      /* storage unavailable — fall back to the project default */
+    }
+    return null;
+  }
+
+  function writeStatusOverride(enabled) {
+    try {
+      localStorage.setItem(STATUS_KEY, enabled ? 'on' : 'off');
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  function stopStatusPoll() {
+    if (statusTimer) {
+      clearTimeout(statusTimer);
+      statusTimer = null;
+    }
+  }
+
+  /** Turn polling on/off; `persist` records the choice as this browser's override. */
+  function setStatusEnabled(enabled, persist) {
+    statusEnabled = !!enabled;
+    if (persist) writeStatusOverride(statusEnabled);
+    if (statusToggle) statusToggle.checked = statusEnabled;
+    if (statusEnabled) {
+      renderStatus({ status: 'unknown' });
+      pollStatus();
+    } else {
+      stopStatusPoll();
+      renderStatus({ status: 'off' });
+    }
+  }
+
+  /** Never rejects: any failure becomes the offline state. */
+  function fetchStatus() {
+    return loadConfig(false).then(function (c) {
+      if (!c || !c.port) return { status: 'offline' };
+      return fetch('http://127.0.0.1:' + c.port + '/status', { cache: 'no-store' })
+        .then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
+        .catch(function () {
+          // The cached port may be stale after a pi restart: clear it so the next
+          // poll re-reads the config and finds the new bridge.
+          cfg = { port: null, token: null };
+          return { status: 'offline' };
+        });
+    });
+  }
+
+  function scheduleStatusPoll() {
+    if (statusTimer) clearTimeout(statusTimer);
+    statusTimer = setTimeout(pollStatus, STATUS_INTERVAL);
+  }
+
+  function pollStatus() {
+    if (!statusEnabled) return;
+    if (document.hidden) {
+      scheduleStatusPoll();
+      return;
+    }
+    fetchStatus()
+      .then(renderStatus)
+      .catch(function () {
+        renderStatus({ status: 'offline' });
+      })
+      .then(scheduleStatusPoll);
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && statusEnabled) pollStatus();
+  });
+
+  statusToggle.addEventListener('change', function () {
+    setStatusEnabled(statusToggle.checked, true);
+  });
+
+  // Resolve the project default first (statusDefault from the Vite plugin), then
+  // apply this browser's override if the user has one.
+  loadConfig().then(function () {
+    var override = readStatusOverride();
+    setStatusEnabled(override !== null ? override : cfg && cfg.statusDefault === true, false);
+  });
 })();

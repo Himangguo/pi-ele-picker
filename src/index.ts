@@ -66,6 +66,15 @@ export interface PiElePickerOptions {
    * was started in. Defaults to `process.cwd()`.
    */
   root?: string;
+  /**
+   * Project-level default for the in-page "session status" toggle. The picker
+   * polls the bridge every 3s to show whether pi is running/idle/stopped, which
+   * costs a loopback request per cycle; it is therefore **off by default**.
+   *
+   * This is only a default: each browser can override it with the switch in the
+   * picker panel (remembered in `localStorage`). Defaults to `false`.
+   */
+  status?: boolean;
 }
 
 interface BridgeInfo {
@@ -109,6 +118,7 @@ function discoverBridge(root: string): BridgeInfo | null {
 
 export default function piElePicker(options: PiElePickerOptions = {}): Plugin {
   const root = options.root ?? process.cwd();
+  const statusDefault = options.status ?? false;
 
   return {
     name: 'pi-ele-picker',
@@ -130,7 +140,13 @@ export default function piElePicker(options: PiElePickerOptions = {}): Plugin {
           const info = discoverBridge(root);
           res.setHeader('content-type', 'application/json');
           res.setHeader('cache-control', 'no-store');
-          res.end(JSON.stringify(info ? { port: info.port, token: info.token } : { port: null }));
+          res.end(
+            JSON.stringify({
+              port: info ? info.port : null,
+              token: info ? info.token : null,
+              statusDefault,
+            })
+          );
           return;
         }
 

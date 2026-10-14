@@ -9,6 +9,8 @@ The picker lives entirely inside a Shadow DOM, so it never leaks styles into —
 ```
 browser page ──(same-origin /__pi_picker__/config)──▶ Vite plugin ──▶ reads ~/.pi/agent/pi-picker/*.json
      │                                                                        (discovers the live bridge)
+     ├──(GET http://127.0.0.1:<port>/status, every 3s)───────────────────────▶ pi bridge extension
+     │                                                                        (session status → launcher dot)
      └──(POST http://127.0.0.1:<port>/pick)────────────────────────────────▶ pi bridge extension
                                                                               │
                                                                        writes to the pi input box
@@ -72,6 +74,10 @@ piElePicker({
   // Directory whose pi bridge to discover; must match the cwd the pi session
   // was started in. Defaults to process.cwd().
   root: process.cwd(),
+  // Project-level default for the in-page session-status switch. Off by default:
+  // the status poll costs one loopback request every 3s, so users opt in from the
+  // picker panel unless you flip this on for them.
+  status: false,
 });
 ```
 
@@ -87,6 +93,7 @@ The launcher starts in the **bottom-right** corner and stays out of the way:
 
 - **Draggable** — grab it and drop it anywhere; the position is remembered per browser (`localStorage`).
 - **Fades when idle** (opacity `0.5`) and returns to full opacity on hover.
+- **Shows the live pi session status** as a coloured dot **when enabled** — green while pi is running, amber while follow-ups are queued, grey while awaiting input, red when the bridge is gone (see [Session status](#session-status)).
 - The panel always opens **next to the launcher**, flipping sides and clamping to stay on screen.
 
 1. Click **🎯 pi 选择器** and pick an element on the page.
@@ -95,11 +102,41 @@ The launcher starts in the **bottom-right** corner and stays out of the way:
    - **写入pi输入框** — pre-fills the current pi input box with the composed prompt; you edit and press Enter.
    - **直接发送** — submits the composed prompt as a real user turn immediately (queued as a follow-up if pi is mid-turn).
 
+### Session status
+
+Status polling is **opt-in and off by default**: each cycle opens a loopback request, so it is disabled unless you want it. There are two levels:
+
+- **Per browser (runtime):** the switch in the picker panel (labelled **状态**) turns polling on/off; the choice is remembered in `localStorage`.
+- **Per project (build time):** the `status` option above sets the default for anyone who has not chosen yet.
+
+Effective state = this browser's saved choice, else the project default. When it is off, the picker issues **no** status requests at all.
+
+When enabled, the launcher carries a small status dot and the panel repeats it as text (status · model · session id). The picker polls the bridge's `GET /status` every 3 seconds (pausing while the tab is hidden and re-discovering the bridge after a pi restart):
+
+| Dot | State | Meaning |
+| --- | --- | --- |
+| 🟢 pulsing | `running` | pi is streaming / executing a turn |
+| 🟡 | `queued` | pi is idle but follow-up messages are queued |
+| ⚪ | `idle` | pi is idle, waiting for your input |
+| 🔴 | `offline` | no live bridge for this project — pi is stopped / not running here |
+| ◯ hollow | — | status display is switched off |
+
+The same payload is available from the bridge directly:
+
+```jsonc
+// GET http://127.0.0.1:<bridge port>/status
+{ "ok": true, "status": "running", "idle": false, "pending": false,
+  "mode": "tui", "sessionId": "…", "model": "Claude Sonnet 4",
+  "provider": "anthropic", "pid": 12345, "cwd": "…", "updatedAt": 1700000000000 }
+```
+
+`/status` needs no token, but non-loopback browser origins get `403`, so an arbitrary website cannot probe session metadata.
+
 ## Notes
 
 - The Vite plugin only runs during `vite dev` (`apply: 'serve'`); it has no effect on builds.
 - Discovery is per-project: the bridge whose `cwd` matches `root` (and whose process is still alive) is selected, so several projects/sessions can run side by side without cross-talk.
-- If pi restarts while a page is open (new random port + token), the next send re-discovers the bridge and retries once automatically — no page refresh needed.
+- If pi restarts while a page is open (new random port + token), the next send re-discovers the bridge and retries once automatically — no page refresh needed. The status poll does the same: a stale port flips to `offline` for one cycle, then rediscovers.
 - The bridge never auto-submits on its own: **写入pi输入框** only fills the editor; **直接发送** is an explicit user action in the page.
 
 ## License
