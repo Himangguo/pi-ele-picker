@@ -116,7 +116,7 @@
   var triggerDot = document.createElement('span');
   triggerDot.className = 'dot st-off';
   trigger.appendChild(triggerDot);
-  trigger.appendChild(document.createTextNode('pi picker'));
+  trigger.appendChild(document.createTextNode('Pi Picker'));
   trigger.title = '拖拽可移动 · 点击开始选择元素';
   root.appendChild(trigger);
 

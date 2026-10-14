@@ -65,7 +65,7 @@ export default defineConfig({
 });
 ```
 
-Then run the dev server **and start pi in the same directory** (the bridge is matched by working directory). A **🎯 pi 选择器** launcher appears in the page.
+Then run the dev server **and start pi in the same directory** (the bridge is matched by working directory). A **Pi Picker** launcher appears in the page.
 
 ### Options
 
@@ -96,7 +96,7 @@ The launcher starts in the **bottom-right** corner and stays out of the way:
 - **Shows the live pi session status** as a coloured dot **when enabled** — green while pi is running, amber while follow-ups are queued, grey while awaiting input, red when the bridge is gone (see [Session status](#session-status)).
 - The panel always opens **next to the launcher**, flipping sides and clamping to stay on screen.
 
-1. Click **🎯 pi 选择器** and pick an element on the page.
+1. Click **Pi Picker** and pick an element on the page.
 2. Describe the change (paste or attach screenshots if you like).
 3. Choose a delivery mode:
    - **写入pi输入框** — pre-fills the current pi input box with the composed prompt; you edit and press Enter.
