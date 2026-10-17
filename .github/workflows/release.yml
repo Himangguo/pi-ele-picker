@@ -1,0 +1,48 @@
+name: Release
+
+# Publishes to npm via Trusted Publishing (OIDC) — no long-lived npm token is
+# used or stored. The registry verifies this exact workflow file against the
+# package's Trusted Publisher configuration on npmjs.com.
+#
+#   npmjs.com → Packages → pi-ele-picker → Settings → Trusted publishing
+#     Organization or user: Himangguo
+#     Repository:           pi-ele-picker
+#     Workflow filename:    release.yml   (filename only, must match this file)
+#     Allowed actions:      npm publish  ← must be enabled, or publish is refused
+#
+# Tagging is what releases: `npm version <x.y.z>` then `git push --follow-tags`.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: # re-run a release (e.g. for a tag pushed before this file existed)
+
+permissions:
+  contents: read
+  id-token: write # required for the OIDC token exchange with the registry
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false # never cache in release builds
+
+      # Node 24 ships npm 11, but Trusted Publishing needs >= 11.5.1 — pin the
+      # floor explicitly so the runner image can never silently fall below it.
+      - name: Ensure npm CLI supports trusted publishing
+        run: npm install -g npm@^11.15.0 && npm --version
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+
+      # package.json's `prepublishOnly` rebuilds; the steps above fail fast with
+      # clearer attribution. OIDC is auto-detected — no NODE_AUTH_TOKEN here.
+      - run: npm publish

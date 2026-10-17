@@ -140,6 +140,25 @@ The same payload is available from the bridge directly:
 - If pi restarts while a page is open (new random port + token), the next send re-discovers the bridge and retries once automatically — no page refresh needed. The status poll does the same: a stale port flips to `offline` for one cycle, then rediscovers.
 - The bridge never auto-submits on its own: **写入pi输入框** only fills the editor; **直接发送** is an explicit user action in the page.
 
+## Releasing
+
+Publishing is token-free: `.github/workflows/release.yml` publishes with **Trusted Publishing (OIDC)**, so `npm publish` authenticates through a short-lived OIDC token minted by GitHub Actions and provenance is attached automatically.
+
+One-time setup (needs an interactive 2FA challenge, so it cannot be automated):
+
+1. npmjs.com → **Packages → pi-ele-picker → Settings → Trusted publishing** → *GitHub Actions*.
+2. Fill in **Organization or user** `Himangguo`, **Repository** `pi-ele-picker`, **Workflow filename** `release.yml` (filename only, must match exactly), leave **Environment name** empty.
+3. Under **Allowed actions**, enable **`npm publish`** — the default is `npm stage publish` only, and a direct `npm publish` from CI is refused without this.
+
+Then, for every release:
+
+```sh
+npm version <x.y.z>          # commits package.json + package-lock.json and tags vX.Y.Z
+git push origin main --follow-tags   # the tag push triggers the Release workflow
+```
+
+The workflow re-runs `typecheck` and `build` before publishing, and can also be triggered by hand from the **Actions** tab (its `workflow_dispatch` trigger) to re-release an existing tag.
+
 ## License
 
 MIT
