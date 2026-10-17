@@ -65,9 +65,11 @@
     '.sw .sw-label { font-size: 11px; }',
     '.panel { position: fixed; width: 380px; max-width: calc(100vw - 36px); z-index: 2147483647; pointer-events: auto; background: #1b1c22; color: #e7e7ea; border: 1px solid #34353d; border-radius: 12px; box-shadow: 0 18px 48px rgba(0,0,0,.5); font-size: 13px; display: none; }',
     '.panel.open { display: block; }',
-    '.hd { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #2b2c33; }',
+    '.hd { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #2b2c33; cursor: grab; user-select: none; -webkit-user-select: none; touch-action: none; }',
     '.hd .title { font-weight: 700; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
     '.hd .close { background: transparent; border: none; color: #9a9aa5; font-size: 16px; cursor: pointer; line-height: 1; }',
+    '.panel.dragging { user-select: none; -webkit-user-select: none; }',
+    '.panel.dragging .hd { cursor: grabbing; }',
     '.meta { padding: 8px 12px 0; color: #9a9aa5; font-size: 11px; line-height: 1.5; word-break: break-all; }',
     '.meta code { color: #a5b4fc; }',
     'textarea { display: block; width: calc(100% - 24px); margin: 8px 12px 0; min-height: 72px; max-height: 200px; resize: vertical; background: #111218; color: #e7e7ea; border: 1px solid #34353d; border-radius: 8px; padding: 8px 10px; font-size: 13px; outline: none; }',
@@ -117,7 +119,7 @@
   triggerDot.className = 'dot st-off';
   trigger.appendChild(triggerDot);
   trigger.appendChild(document.createTextNode('Pi Picker'));
-  trigger.title = '拖拽可移动 · 点击开始选择元素';
+  trigger.title = '拖拽可移动 · 面板标题栏也可拖拽 · 点击开始选择元素';
   root.appendChild(trigger);
 
   var panel = document.createElement('div');
@@ -160,6 +162,29 @@
   var EDGE = 8;
   var suppressClick = false;
   var drag = null;
+
+  /* --- panel: independently draggable, remembered as an offset from the anchor --- */
+  var PANEL_OFS_KEY = 'pi-ele-picker:panel-ofs:v1';
+  var panelOffset = { dx: 0, dy: 0 };
+  var panelDrag = null;
+
+  function loadPanelOffset() {
+    try {
+      var o = JSON.parse(localStorage.getItem(PANEL_OFS_KEY) || 'null');
+      if (o && typeof o.dx === 'number' && typeof o.dy === 'number') return { dx: o.dx, dy: o.dy };
+    } catch (e) {
+      /* storage unavailable — fall back to the anchored position */
+    }
+    return { dx: 0, dy: 0 };
+  }
+
+  function savePanelOffset() {
+    try {
+      localStorage.setItem(PANEL_OFS_KEY, JSON.stringify(panelOffset));
+    } catch (e) {
+      /* storage unavailable — ignore */
+    }
+  }
 
   // Hide until positioned to avoid a flash at the origin.
   trigger.style.visibility = 'hidden';
@@ -215,9 +240,8 @@
     trigger.style.visibility = '';
   }
 
-  /** Place the panel next to the launcher, flipping sides to stay in view. */
-  function positionPanel() {
-    if (!panel.classList.contains('open')) return;
+  /** Where the panel sits until it is dragged: next to the launcher, flipping sides to stay in view. */
+  function panelBasePos() {
     var gap = 10;
     var m = 10;
     var t = trigger.getBoundingClientRect();
@@ -227,8 +251,32 @@
     var vh = window.innerHeight;
     var top = t.top + t.height / 2 > vh / 2 ? t.top - gap - ph : t.bottom + gap;
     var left = t.left + t.width / 2 > vw / 2 ? t.right - pw : t.left;
-    panel.style.left = Math.max(m, Math.min(left, vw - pw - m)) + 'px';
-    panel.style.top = Math.max(m, Math.min(top, vh - ph - m)) + 'px';
+    return { left: Math.max(m, Math.min(left, vw - pw - m)), top: Math.max(m, Math.min(top, vh - ph - m)) };
+  }
+
+  function clampPanelPos(left, top) {
+    var m = 10;
+    var pw = panel.offsetWidth || 380;
+    var ph = panel.offsetHeight || 320;
+    var vw = window.innerWidth;
+    var vh = window.innerHeight;
+    return {
+      left: Math.max(m, Math.min(left, vw - pw - m)),
+      top: Math.max(m, Math.min(top, vh - ph - m)),
+    };
+  }
+
+  function setPanelPos(left, top) {
+    panel.style.left = left + 'px';
+    panel.style.top = top + 'px';
+  }
+
+  /** Anchor the panel next to the launcher, plus whatever offset the user dragged it by. */
+  function positionPanel() {
+    if (!panel.classList.contains('open')) return;
+    var b = panelBasePos();
+    var p = clampPanelPos(b.left + panelOffset.dx, b.top + panelOffset.dy);
+    setPanelPos(p.left, p.top);
   }
 
   trigger.addEventListener('pointerdown', function (e) {
@@ -269,6 +317,65 @@
   trigger.addEventListener('pointerup', endDrag);
   trigger.addEventListener('pointercancel', endDrag);
 
+  /* --- panel drag: grab the title bar (or any area that is not interactive) --- */
+  /**
+   * Children that own the pointer keep their native behaviour: typing, clicking,
+   * selecting the selector text, dropping images. Everything else is a drag handle.
+   */
+  function isInteractiveNode(node) {
+    if (!node || typeof node.closest !== 'function') return false;
+    return !!node.closest('textarea, input, button, label, select, a, img, .meta, .shot, [contenteditable="true"]');
+  }
+
+  panel.addEventListener('pointerdown', function (e) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (isInteractiveNode(e.target)) return;
+    var r = panel.getBoundingClientRect();
+    panelDrag = {
+      id: e.pointerId,
+      sx: e.clientX,
+      sy: e.clientY,
+      ox: r.left,
+      oy: r.top,
+      base: panelBasePos(),
+      moved: false,
+    };
+    try {
+      panel.setPointerCapture(e.pointerId);
+    } catch (err) {
+      /* ignore */
+    }
+    e.preventDefault();
+  });
+
+  panel.addEventListener('pointermove', function (e) {
+    if (!panelDrag || e.pointerId !== panelDrag.id) return;
+    var dx = e.clientX - panelDrag.sx;
+    var dy = e.clientY - panelDrag.sy;
+    if (!panelDrag.moved && Math.abs(dx) + Math.abs(dy) < 4) return;
+    panelDrag.moved = true;
+    panel.classList.add('dragging');
+    var p = clampPanelPos(panelDrag.ox + dx, panelDrag.oy + dy);
+    setPanelPos(p.left, p.top);
+    // Store the drag as an offset from the anchor so the panel keeps following the launcher.
+    panelOffset = { dx: p.left - panelDrag.base.left, dy: p.top - panelDrag.base.top };
+  });
+
+  function endPanelDrag(e) {
+    if (!panelDrag || e.pointerId !== panelDrag.id) return;
+    var moved = panelDrag.moved;
+    panelDrag = null;
+    panel.classList.remove('dragging');
+    try {
+      panel.releasePointerCapture(e.pointerId);
+    } catch (err) {
+      /* ignore */
+    }
+    if (moved) savePanelOffset();
+  }
+  panel.addEventListener('pointerup', endPanelDrag);
+  panel.addEventListener('pointercancel', endPanelDrag);
+
   window.addEventListener('resize', function () {
     var p = launcherPos();
     setLauncherPos(p.x, p.y);
@@ -276,6 +383,7 @@
   });
 
   initLauncherPos();
+  panelOffset = loadPanelOffset();
 
   function setStatus(msg, kind) {
     statusEl.textContent = msg || '';
@@ -694,7 +802,7 @@
     if (info && info.sessionId) detail.push('会话 ' + String(info.sessionId).slice(0, 8));
     var line = STATUS_LABEL[st] + (detail.length ? ' · ' + detail.join(' · ') : '');
     sessionText.textContent = line;
-    var title = line + ' · 拖拽可移动 · 点击开始选择元素';
+    var title = line + ' · 拖拽可移动 · 面板标题栏也可拖拽 · 点击开始选择元素';
     if (title !== statusTitle) {
       trigger.title = title;
       statusTitle = title;

@@ -95,6 +95,7 @@ The launcher starts in the **bottom-right** corner and stays out of the way:
 - **Fades when idle** (opacity `0.5`) and returns to full opacity on hover.
 - **Shows the live pi session status** as a coloured dot **when enabled** — green while pi is running, amber while follow-ups are queued, grey while awaiting input, red when the bridge is gone (see [Session status](#session-status)).
 - The panel always opens **next to the launcher**, flipping sides and clamping to stay on screen.
+- **The panel is draggable too** — grab its title bar (or any empty spot) to move it; the offset from the launcher is remembered per browser (`localStorage`), and the panel still follows the launcher while clamping itself to stay on screen.
 
 1. Click **Pi Picker** and pick an element on the page.
 2. Describe the change (paste or attach screenshots if you like).
