@@ -63,12 +63,33 @@ jobs:
       - name: Verify the GitHub id-token endpoint is reachable
         if: steps.check.outputs.publish == 'true'
         run: |
-          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
-            echo "id-token endpoint is available — 'permissions: id-token: write' is in effect."
-          else
+          if [ -z "$ACTIONS_ID_TOKEN_REQUEST_URL" ] || [ -z "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
             echo "::error::No GitHub id-token in the environment. Check 'permissions: id-token: write'."
             exit 1
           fi
+          echo "id-token endpoint is available — 'permissions: id-token: write' is in effect."
+          # Print the claims the registry matches the Trusted Publisher config
+          # against, so an "OIDC token exchange error - package not found" can be
+          # compared field by field instead of guessed at. Claims only — the token
+          # itself is never echoed.
+          curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=npm:registry.npmjs.org" \
+          | node -e '
+              let raw = ""
+              process.stdin.on("data", (c) => (raw += c)).on("end", () => {
+                const { value } = JSON.parse(raw)
+                const p = JSON.parse(Buffer.from(value.split(".")[1], "base64url").toString())
+                console.log("OIDC claims the registry sees:")
+                console.log(JSON.stringify({
+                  repository: p.repository,
+                  repository_owner: p.repository_owner,
+                  workflow_ref: p.workflow_ref,
+                  environment: p.environment || null,
+                  ref: p.ref,
+                  event_name: p.event_name,
+                }, null, 2))
+              })
+            '
 
       - if: steps.check.outputs.publish == 'true'
         run: npm publish --loglevel verbose
