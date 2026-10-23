@@ -131,7 +131,7 @@ The same payload is available from the bridge directly:
   "provider": "anthropic", "pid": 12345, "cwd": "…", "updatedAt": 1700000000000 }
 ```
 
-`/status` needs no token, but non-loopback browser origins get `403`, so an arbitrary website cannot probe session metadata.
+`/status` needs no token, but non-local browser origins get `403`, so an arbitrary website cannot probe session metadata. "Local" covers `localhost` / `*.localhost`, `127.0.0.0/8`, `0.0.0.0`, `[::1]`, and private or link-local IPv4 literals (`10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`, `169.254.x.x`) — so a dev server you open over your machine's LAN IPv4 address (Vite binds `0.0.0.0` by default) works, while an arbitrary site does not.
 
 ## Notes
 

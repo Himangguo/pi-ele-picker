@@ -12,7 +12,10 @@
  * Wire protocol (POST /pick):
  *   headers: content-type: application/json
  *            x-pi-picker-token: <token from the registry file>
- *            origin:            http://localhost:<port> | http://127.0.0.1:<port>
+ *            origin:            a local origin — http(s)://localhost:<port>,
+ *                               http(s)://127.0.0.1:<port>, or any loopback /
+ *                               private IPv4 literal (192.168.x.x, 10.x.x.x,
+ *                               172.16-31.x.x, 169.254.x.x, 0.0.0.0)
  *   body:    { text?, images?: [{name, dataUrl}], element?: {...}, url?, title?, submit? }
  *   reply:   { ok: true, mode, inserted } | { ok: true, mode, submitted, queued? }
  *            | { ok: false, error }
@@ -22,9 +25,9 @@
  *              mode, sessionId, model, provider, pid, cwd, updatedAt }
  *
  * `/status` is polled by the browser picker to render a live session badge (the
- * launcher dot + the panel status line). It has no token: any loopback-origin
- * page may read it, but non-loopback browser origins are rejected so an arbitrary
- * website cannot probe session metadata.
+ * launcher dot + the panel status line). It has no token: any local-origin page
+ * may read it, but non-local browser origins are rejected so an arbitrary website
+ * cannot probe session metadata.
  *
  * Two delivery modes:
  *   - default (submit falsy): pre-fill the current pi input editor for review.
@@ -50,12 +53,79 @@ function log(msg: string): void {
   }
 }
 
-function isLoopbackOrigin(origin: unknown): boolean {
-  return typeof origin === 'string' && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+/** Loopback / private / link-local / "this host" IPv4 literals. */
+function isLocalIpv4(ip: string): boolean {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return false;
+  const octets: number[] = [];
+  for (const p of parts) {
+    if (!/^\d{1,3}$/.test(p)) return false;
+    const n = Number(p);
+    if (n > 255) return false;
+    octets.push(n);
+  }
+  const [a, b] = octets;
+  if (a === 127 || a === 0) return true; // 127.0.0.0/8 loopback · 0.0.0.0 "this host"
+  if (a === 10) return true; // 10.0.0.0/8
+  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+  if (a === 192 && b === 168) return true; // 192.168.0.0/16
+  if (a === 169 && b === 254) return true; // 169.254.0.0/16 link-local
+  return false;
 }
 
-function isLoopbackHost(host: unknown): boolean {
-  return typeof host === 'string' && /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host);
+/**
+ * `::ffff:7f00:1` (the hex form WHATWG normalises IPv4-mapped IPv6 to) and the
+ * literal `::ffff:127.0.0.1` both become `127.0.0.1`; anything else is null.
+ */
+function v4MappedToIpv4(host: string): string | null {
+  const m = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
+  if (!m) return null;
+  const hi = parseInt(m[1], 16);
+  const lo = parseInt(m[2], 16);
+  return [hi >> 8, hi & 0xff, lo >> 8, lo & 0xff].join('.');
+}
+
+/**
+ * Is this hostname the developer's own machine?
+ *
+ * The picker is injected by the developer's Vite dev server, which Vite binds to
+ * `0.0.0.0` by default — so the page is routinely opened as
+ * `http://0.0.0.0:5173`, `http://192.168.1.5:5173`, or `http://[::1]:5173`
+ * rather than `http://localhost:5173`. All of those are still local, so they are
+ * accepted alongside `localhost` / `*.localhost` / `127.0.0.1`.
+ *
+ * Only literal addresses are accepted: a *name* (`dev.internal`, `evil.com`)
+ * never passes, which keeps the DNS-rebinding defence intact — that attack needs
+ * a name in the Host header pointed at 127.0.0.1.
+ */
+function isLocalHostname(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (host === '::1') return true;
+  if (host.startsWith('::ffff:')) {
+    return isLocalIpv4(v4MappedToIpv4(host) ?? host.slice('::ffff:'.length));
+  }
+  return isLocalIpv4(host);
+}
+
+/** Validate a browser `Origin` header (`scheme://host[:port]`). */
+function isLocalOrigin(origin: unknown): boolean {
+  if (typeof origin !== 'string' || !origin) return false;
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false; // `null` (file://, sandboxed iframes) and junk land here
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+  return isLocalHostname(url.hostname);
+}
+
+/** Validate a raw `Host` header (`host[:port]` or `[ipv6][:port]`). */
+function isLocalHost(host: unknown): boolean {
+  if (typeof host !== 'string' || !host) return false;
+  const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(host);
+  return isLocalHostname(bracketed ? bracketed[1] : host.replace(/:\d+$/, ''));
 }
 
 function isPidAlive(pid: number): boolean {
@@ -297,6 +367,13 @@ export default function (pi: ExtensionAPI): void {
     res.setHeader('access-control-allow-headers', 'content-type,x-pi-picker-token');
     res.setHeader('access-control-allow-methods', 'GET,POST,OPTIONS');
     if (req.method === 'OPTIONS') {
+      // Chrome's Private Network Access: a page served from a LAN address is a
+      // "private" context while the bridge on 127.0.0.1 is "local", so the
+      // browser preflights with this header before any fetch. Grant the
+      // permission here — the real origin gate still runs on POST /pick below.
+      if (req.headers['access-control-request-private-network'] === 'true') {
+        res.setHeader('access-control-allow-private-network', 'true');
+      }
       res.writeHead(204);
       res.end();
       return;
@@ -311,9 +388,9 @@ export default function (pi: ExtensionAPI): void {
     }
 
     if (req.method === 'GET' && url === '/status') {
-      // Read-only and tokenless, so gate it on a loopback browser origin: reject a
+      // Read-only and tokenless, so gate it on a local browser origin: reject a
       // foreign page while still allowing no-Origin callers (curl, local scripts).
-      if (origin && !isLoopbackOrigin(origin)) {
+      if (origin && !isLocalOrigin(origin)) {
         res.writeHead(403, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: 'forbidden origin' }));
         return;
@@ -330,12 +407,13 @@ export default function (pi: ExtensionAPI): void {
     }
 
     // SECURITY: block cross-site / DNS-rebinding requests from arbitrary pages.
-    if (!isLoopbackOrigin(origin)) {
+    // Local dev servers that are opened via a LAN IPv4 address still count as local.
+    if (!isLocalOrigin(origin)) {
       res.writeHead(403, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'forbidden origin' }));
       return;
     }
-    if (!isLoopbackHost(req.headers.host)) {
+    if (!isLocalHost(req.headers.host)) {
       res.writeHead(403, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'forbidden host' }));
       return;
