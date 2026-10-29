@@ -119,7 +119,7 @@
   triggerDot.className = 'dot st-off';
   trigger.appendChild(triggerDot);
   trigger.appendChild(document.createTextNode('Pi Picker'));
-  trigger.title = '拖拽可移动 · 面板标题栏也可拖拽 · 点击开始选择元素';
+  trigger.title = '拖拽可移动 · 面板标题栏也可拖拽 · 悬浮可再次打开上次元素 · 点击开始选择元素';
   root.appendChild(trigger);
 
   var panel = document.createElement('div');
@@ -149,6 +149,8 @@
   var fileEl = panel.querySelector('.file');
 
   var picking = false;
+  // The captured element the panel acts on. Stays put across close/reopen so
+  // hovering the launcher can bring the panel back without overwriting it.
   var target = null;
   var shots = [];
   // Set when a pick commits on pointerdown; swallows the follow-up click so the
@@ -281,6 +283,7 @@
 
   trigger.addEventListener('pointerdown', function (e) {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
+    clearHoverOpen();
     var r = trigger.getBoundingClientRect();
     drag = { id: e.pointerId, sx: e.clientX, sy: e.clientY, ox: r.left, oy: r.top, moved: false };
     try {
@@ -419,7 +422,8 @@
   function onMove(e) {
     var el = elFromEvent(e);
     if (!el) return;
-    target = el;
+    // Highlight only: `target` is replaced solely by a committed pick, so Esc
+    // or pausing on another element never clobbers the panel's element.
     showHighlight(el);
   }
 
@@ -464,6 +468,12 @@
     hint.style.display = on ? 'block' : 'none';
     trigger.style.display = on ? 'none' : 'flex';
     if (on) {
+      // Picking means "choose another element": hide the panel so it never
+      // covers the page. It reopens when the new pick commits, and the previous
+      // element only gets replaced at that point.
+      clearHoverOpen();
+      panel.classList.remove('open');
+      hideHighlight();
       window.addEventListener('mousemove', onMove, true);
       window.addEventListener('pointerdown', onPointerDown, true);
       window.addEventListener('keydown', onKey, true);
@@ -475,12 +485,19 @@
     }
   }
 
+  /** Re-show the panel for the element already captured — no re-pick, no overwrite. */
+  function openPanel() {
+    if (!target) return false;
+    panel.classList.add('open');
+    showHighlight(target);
+    positionPanel();
+    return true;
+  }
+
   function select(el) {
     target = el;
-    showHighlight(el);
     metaEl.innerHTML = '<code>' + escapeHtml(cssPath(el)) + '</code>' + vueLine(el);
-    panel.classList.add('open');
-    positionPanel();
+    openPanel();
     taEl.focus();
   }
 
@@ -722,6 +739,33 @@
   window.addEventListener('pointerdown', function () { swallowClick = false; }, true);
   window.addEventListener('click', onClick, true);
 
+  /* --- hover reopens the last captured element --- */
+  var HOVER_OPEN_DELAY = 200;
+  var hoverOpenTimer = null;
+
+  function clearHoverOpen() {
+    if (hoverOpenTimer) {
+      clearTimeout(hoverOpenTimer);
+      hoverOpenTimer = null;
+    }
+  }
+
+  trigger.addEventListener('pointerenter', function (e) {
+    // Mouse only: touch/pen enter is part of a tap, which must keep its click.
+    if (e.pointerType !== 'mouse') return;
+    if (picking || drag) return;
+    clearHoverOpen();
+    // A short dwell keeps a mouse merely passing over the launcher from popping
+    // the panel open, while still feeling immediate when you aim at it.
+    hoverOpenTimer = setTimeout(function () {
+      hoverOpenTimer = null;
+      if (picking || drag) return;
+      openPanel();
+    }, HOVER_OPEN_DELAY);
+  });
+
+  trigger.addEventListener('pointerleave', clearHoverOpen);
+
   trigger.addEventListener('click', function () {
     if (suppressClick) {
       suppressClick = false;
@@ -802,7 +846,7 @@
     if (info && info.sessionId) detail.push('会话 ' + String(info.sessionId).slice(0, 8));
     var line = STATUS_LABEL[st] + (detail.length ? ' · ' + detail.join(' · ') : '');
     sessionText.textContent = line;
-    var title = line + ' · 拖拽可移动 · 面板标题栏也可拖拽 · 点击开始选择元素';
+    var title = line + ' · 拖拽可移动 · 面板标题栏也可拖拽 · 悬浮可再次打开上次元素 · 点击开始选择元素';
     if (title !== statusTitle) {
       trigger.title = title;
       statusTitle = title;

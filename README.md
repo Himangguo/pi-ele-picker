@@ -94,6 +94,8 @@ The launcher starts in the **bottom-right** corner and stays out of the way:
 - **Draggable** — grab it and drop it anywhere; the position is remembered per browser (`localStorage`).
 - **Fades when idle** (opacity `0.5`) and returns to full opacity on hover.
 - **Shows the live pi session status** as a coloured dot **when enabled** — green while pi is running, amber while follow-ups are queued, grey while awaiting input, red when the bridge is gone (see [Session status](#session-status)).
+- **Hovering the launcher reopens the panel** for the element you captured last — no need to pick it again, and the captured element is only replaced when you commit a new pick. Closing the panel with **✕** keeps it available this way.
+- Clicking the launcher starts a **new pick**: the panel steps out of the way, and pressing **Esc** keeps the previously captured element intact.
 - The panel always opens **next to the launcher**, flipping sides and clamping to stay on screen.
 - **The panel is draggable too** — grab its title bar (or any empty spot) to move it; the offset from the launcher is remembered per browser (`localStorage`), and the panel still follows the launcher while clamping itself to stay on screen.
 
