@@ -152,10 +152,16 @@
   // The captured element the panel acts on. Stays put across close/reopen so
   // hovering the launcher can bring the panel back without overwriting it.
   var target = null;
+  // The selector `target` was captured through. Kept so the draft can be
+  // re-attached after a reload replaces the DOM node `target` points at.
+  var targetSelector = null;
   var shots = [];
   // Set when a pick commits on pointerdown; swallows the follow-up click so the
   // page (links, buttons) never reacts to the click that finished the pick.
   var swallowClick = false;
+  // Set when the user closes the panel themselves, so a reload does not pop it
+  // back open on top of whatever they moved on to.
+  var panelDismissed = false;
 
   document.documentElement.appendChild(host);
 
@@ -487,17 +493,23 @@
 
   /** Re-show the panel for the element already captured — no re-pick, no overwrite. */
   function openPanel() {
-    if (!target) return false;
+    var el = resolveTarget();
+    if (!el) return false;
     panel.classList.add('open');
-    showHighlight(target);
+    showHighlight(el);
     positionPanel();
     return true;
   }
 
   function select(el) {
     target = el;
-    metaEl.innerHTML = '<code>' + escapeHtml(cssPath(el)) + '</code>' + vueLine(el);
+    targetSelector = cssPath(el);
+    // A new pick re-arms the draft: the user is working again, so a reload must
+    // bring the panel back even if they closed it earlier.
+    panelDismissed = false;
+    metaEl.innerHTML = '<code>' + escapeHtml(targetSelector) + '</code>' + vueLine(el);
     openPanel();
+    saveDraft();
     taEl.focus();
   }
 
@@ -593,6 +605,7 @@
   function addShot(dataUrl) {
     shots.push(dataUrl);
     renderShots();
+    saveShots();
   }
 
   function renderShots() {
@@ -609,6 +622,7 @@
       x.addEventListener('click', function () {
         shots.splice(i, 1);
         renderShots();
+        saveShots();
       });
       d1.appendChild(img);
       d1.appendChild(x);
@@ -625,6 +639,224 @@
       };
       fr.readAsDataURL(f);
     });
+  }
+
+  /* --- draft persistence ---------------------------------------------------
+   *
+   * Vite reloads the page on every save, and the composer is by far the most
+   * expensive thing in this tool to lose: a couple of hundred words of
+   * description plus a few pasted screenshots. So the draft is mirrored into
+   * `sessionStorage` and re-attached on the next boot.
+   *
+   * `sessionStorage`, not `localStorage`: a draft belongs to the tab that
+   * produced it and must not follow the developer into a fresh window.
+   *
+   * Two keys on purpose. The text changes on every keystroke while the shots
+   * change rarely; re-serialising megabytes of base64 per keypress would both
+   * stutter the panel and hit the ~5MB quota needlessly. The text key stays
+   * tiny so writing it aggressively is cheap, and the shots key is rewritten
+   * only when the shot set actually changes.
+   *
+   * Everything here is best-effort: a storage failure must never break the
+   * editor, only lose the draft.
+   */
+  var DRAFT_PREFIX = 'pi-ele-picker:draft:v1';
+  var SHOTS_PREFIX = 'pi-ele-picker:shots:v1';
+  var SAVE_DEBOUNCE = 250;
+  // A draft left over from a tab that stayed open for days is more confusing than
+  // helpful: it describes an element that has almost certainly moved on.
+  var DRAFT_TTL = 24 * 60 * 60 * 1000;
+  var saveTimer = null;
+  // True while an edit has not reached storage yet, so a page that is going
+  // away flushes exactly once and a delivered draft is not resurrected.
+  var draftDirty = false;
+  var shotsDropped = false;
+
+  function draftKey() {
+    return DRAFT_PREFIX + ':' + location.pathname;
+  }
+
+  function shotsKey() {
+    return SHOTS_PREFIX + ':' + location.pathname;
+  }
+
+  /** Never throws: returns false when storage is full or unavailable. */
+  function writeStorage(key, value) {
+    try {
+      sessionStorage.setItem(key, value);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function removeStorage(key) {
+    try {
+      sessionStorage.removeItem(key);
+    } catch (e) {
+      /* storage unavailable — nothing to clear */
+    }
+  }
+
+  function readStorage(key) {
+    try {
+      return sessionStorage.getItem(key);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function saveShots() {
+    if (!shots.length) {
+      removeStorage(shotsKey());
+      shotsDropped = false;
+      return;
+    }
+    if (writeStorage(shotsKey(), JSON.stringify(shots))) {
+      shotsDropped = false;
+      return;
+    }
+    // The images do not fit. Keep the words and say so once, so a reload does not
+    // silently eat the screenshots that were just pasted.
+    removeStorage(shotsKey());
+    if (!shotsDropped) {
+      shotsDropped = true;
+      setStatus('截图过大，刷新后不会保留（描述仍会保存）', 'err');
+    }
+  }
+
+  function saveDraft() {
+    var rec = {
+      selector: targetSelector,
+      text: taEl.value,
+      dismissed: panelDismissed,
+      savedAt: Date.now(),
+    };
+    if (!rec.text && !rec.selector) {
+      // Nothing worth restoring — do not resurrect an empty panel on reload.
+      clearDraft();
+      return;
+    }
+    // Stay dirty when the write fails, so a page that is going away retries.
+    if (writeStorage(draftKey(), JSON.stringify(rec))) draftDirty = false;
+  }
+
+  /** Debounced text write: the keystroke path must stay cheap. */
+  function scheduleSave() {
+    draftDirty = true;
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(function () {
+      saveTimer = null;
+      saveDraft();
+    }, SAVE_DEBOUNCE);
+  }
+
+  /** Write any pending edit right now — the page is being torn down. */
+  function flushDraft() {
+    if (!draftDirty && !saveTimer) return;
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = null;
+    saveDraft();
+  }
+
+  /** Forget the draft: it has been delivered, or it is stale garbage. */
+  function clearDraft() {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = null;
+    draftDirty = false;
+    shotsDropped = false;
+    removeStorage(draftKey());
+    removeStorage(shotsKey());
+  }
+
+  /**
+   * The live element the panel acts on.
+   *
+   * `target` is a DOM reference captured at pick time, so an HMR update — or any
+   * re-render that swaps the node — leaves it detached. Re-resolving from the
+   * remembered selector keeps the panel pointed at the right element without
+   * asking the user to pick again, and returns null when the element is really
+   * gone, which is what send() and openPanel() need to know.
+   */
+  function resolveTarget() {
+    if (target && target.isConnected) return target;
+    if (targetSelector) {
+      try {
+        var el = document.querySelector(targetSelector);
+        if (el) {
+          target = el;
+          return el;
+        }
+      } catch (e) {
+        /* not valid CSS (Tailwind-style class names) — cannot re-resolve */
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Re-attach the draft written before this page load.
+   *
+   * The element is re-resolved from its selector rather than trusted blindly:
+   * an HMR update replaces DOM nodes, so a captured `target` reference is dead by
+   * the time the page comes back. If the selector no longer resolves, the text
+   * and screenshots are still restored into the composer, so the next pick
+   * inherits them instead of the user retyping everything.
+   */
+  function restoreDraft() {
+    var raw = readStorage(draftKey());
+    if (!raw) return;
+    var rec;
+    try {
+      rec = JSON.parse(raw);
+    } catch (e) {
+      clearDraft();
+      return;
+    }
+    if (!rec || typeof rec !== 'object') {
+      clearDraft();
+      return;
+    }
+    if (typeof rec.savedAt === 'number' && Date.now() - rec.savedAt > DRAFT_TTL) {
+      clearDraft();
+      return;
+    }
+
+    taEl.value = typeof rec.text === 'string' ? rec.text : '';
+
+    var rawShots = readStorage(shotsKey());
+    if (rawShots) {
+      try {
+        var arr = JSON.parse(rawShots);
+        if (arr instanceof Array) {
+          shots = arr.filter(function (d) {
+            return typeof d === 'string' && d.indexOf('data:image/') === 0;
+          });
+          renderShots();
+        }
+      } catch (e) {
+        removeStorage(shotsKey());
+      }
+    }
+
+    if (rec.selector) {
+      targetSelector = String(rec.selector);
+      var el = resolveTarget();
+      if (el) metaEl.innerHTML = '<code>' + escapeHtml(targetSelector) + '</code>' + vueLine(el);
+      else targetSelector = null; // keep the words, drop the dead reference
+    }
+
+    if (rec.dismissed) return;
+    if (target) {
+      openPanel();
+      return;
+    }
+    if (!taEl.value && !shots.length) return;
+    // The element is gone but the words survive: show the composer so the draft is
+    // visibly still there, and let the next pick attach it to a new element.
+    panel.classList.add('open');
+    metaEl.textContent = '上次选中的元素已不在页面中，请重新点击选择';
+    positionPanel();
   }
 
   function loadConfig(force) {
@@ -687,6 +919,12 @@
   }
 
   function send(submit) {
+    // The picked node can be detached by an HMR update while the panel stays open
+    // on it; describing a dead node would ship a description of nothing.
+    if (!resolveTarget()) {
+      setStatus('目标元素已不在页面中，请重新点击选择元素', 'err');
+      return;
+    }
     sendBtn.disabled = true;
     sendNowBtn.disabled = true;
     setStatus(submit ? '直接发送中…' : '写入中…');
@@ -720,6 +958,7 @@
           taEl.value = '';
           shots = [];
           renderShots();
+          clearDraft();
         } else {
           setStatus('失败: ' + ((out.body && out.body.error) || out.error || 'HTTP ' + out.status), 'err');
         }
@@ -777,6 +1016,10 @@
     panel.classList.remove('open');
     hideHighlight();
     setStatus('');
+    // Remember the dismissal so a reload does not pop the panel back open, while
+    // the draft stays available through the launcher's hover-to-reopen.
+    panelDismissed = true;
+    saveDraft();
   });
   attachBtn.addEventListener('click', function () {
     fileEl.click();
@@ -791,6 +1034,8 @@
   sendNowBtn.addEventListener('click', function () {
     send(true);
   });
+  taEl.addEventListener('input', scheduleSave);
+  window.addEventListener('pagehide', flushDraft);
   taEl.addEventListener('paste', function (e) {
     var items = e.clipboardData && e.clipboardData.items;
     if (!items) return;
@@ -944,4 +1189,8 @@
     var override = readStatusOverride();
     setStatusEnabled(override !== null ? override : cfg && cfg.statusDefault === true, false);
   });
+
+  // Last: the draft restore depends on state initialised above it (launcher
+  // position, panel offset) and on the draft storage keys being assigned.
+  restoreDraft();
 })();

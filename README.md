@@ -105,6 +105,18 @@ The launcher starts in the **bottom-right** corner and stays out of the way:
    - **写入pi输入框** — pre-fills the current pi input box with the composed prompt; you edit and press Enter.
    - **直接发送** — submits the composed prompt as a real user turn immediately (queued as a follow-up if pi is mid-turn).
 
+### Drafts survive reloads
+
+Vite reloads the page every time you save a file, so the composer is mirrored into `sessionStorage` and re-attached on the next load:
+
+- The description and any attached screenshots come back exactly as they were.
+- The captured element is **re-resolved from its selector**, so after an HMR update you land straight back in the panel on the same element — no re-pick.
+- Closing the panel with **✕** also suppresses the automatic reopen; the draft stays reachable through the launcher's hover.
+- If the element is genuinely gone (unmounted, renamed), the words are still restored and the panel says so — picking a new element attaches the existing text to it.
+- Sending is refused while the panel points at an element that has left the page, so a stale pick can never ship a description of nothing. A replaced node under the same selector (the usual HMR case) is picked up automatically instead.
+- The draft is per tab and per path (`sessionStorage`, not `localStorage`), and one older than 24h is discarded. A successful send clears it.
+- Screenshots that exceed the ~5MB `sessionStorage` quota are dropped from the draft with a notice rather than silently lost; the description is always kept.
+
 ### Session status
 
 Status polling is **opt-in and off by default**: each cycle opens a loopback request, so it is disabled unless you want it. There are two levels:
