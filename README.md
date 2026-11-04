@@ -153,6 +153,7 @@ The same payload is available from the bridge directly:
 - Discovery is per-project: the bridge whose `cwd` matches `root` (and whose process is still alive) is selected, so several projects/sessions can run side by side without cross-talk.
 - If pi restarts while a page is open (new random port + token), the next send re-discovers the bridge and retries once automatically — no page refresh needed. The status poll does the same: a stale port flips to `offline` for one cycle, then rediscovers.
 - The bridge never auto-submits on its own: **写入pi输入框** only fills the editor; **直接发送** is an explicit user action in the page.
+- Attached screenshots are decoded to temp files under `<tmpdir>/pi-picker` and referenced by path in the composed prompt (that is what the agent reads). Files older than 24h are swept on the next session start or pick, so the directory cannot grow without bound — nothing is meant to be kept there, and nothing needs cleaning up by hand.
 
 ## Development
 

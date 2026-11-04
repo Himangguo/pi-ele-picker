@@ -36,7 +36,7 @@
  */
 import { createServer, type Server } from 'node:http';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, writeFileSync, rmSync, existsSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import type { ExtensionAPI, ExtensionUIContext } from '@earendil-works/pi-coding-agent';
@@ -44,6 +44,24 @@ import type { ExtensionAPI, ExtensionUIContext } from '@earendil-works/pi-coding
 const REG_DIR = join(homedir(), '.pi', 'agent', 'pi-picker');
 const IMG_DIR = join(tmpdir(), 'pi-picker');
 const MAX_BODY = 40 * 1024 * 1024;
+
+/**
+ * How long a staged screenshot is kept.
+ *
+ * The file only has to outlive the moment the agent reads it, and the agent reads
+ * it after the developer sends the prompt — which is not always right away: the
+ * "写入pi输入框" flow can leave a prompt sitting in the editor until the next
+ * morning. A day covers that, and it matches the browser draft's own TTL: once the
+ * draft has expired those paths can never be referenced again.
+ *
+ * Nothing else ever deletes these files, so without the sweep below the directory
+ * grows forever — one screenshot is a few MB, and every pick leaves its own here.
+ */
+const IMG_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** The sweep is cheap but pointless per pick, so it runs at most this often. */
+const IMG_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+let lastImageSweepAt = 0;
 
 function log(msg: string): void {
   try {
@@ -203,8 +221,49 @@ interface PickPayload {
   submit?: boolean;
 }
 
+/**
+ * Delete staged screenshots older than IMG_TTL_MS.
+ *
+ * Age comes from the file's mtime rather than from any index we keep, so images
+ * orphaned by a pi process that died mid-pick are collected too.
+ *
+ * Best-effort throughout, and `force: true` on removal: a second pi process
+ * sweeping the same shared tmpdir at the same moment must not be able to fail a
+ * pick, and a file that is already gone is the outcome we wanted anyway.
+ *
+ * `force` bypasses the throttle — used on session start, where one sweep per
+ * session is exactly the guarantee we want.
+ */
+function sweepStaleImages(force = false): void {
+  const now = Date.now();
+  if (!force && now - lastImageSweepAt < IMG_SWEEP_INTERVAL_MS) return;
+  lastImageSweepAt = now;
+
+  let removed = 0;
+  try {
+    for (const entry of readdirSync(IMG_DIR, { withFileTypes: true })) {
+      // Only ever touch regular files we could have written ourselves.
+      if (!entry.isFile()) continue;
+      const full = join(IMG_DIR, entry.name);
+      try {
+        if (now - statSync(full).mtimeMs <= IMG_TTL_MS) continue;
+        rmSync(full, { force: true });
+        removed++;
+      } catch {
+        /* vanished under us, or unreadable — nothing left to do for this one */
+      }
+    }
+  } catch {
+    return; // IMG_DIR does not exist yet: nothing has ever been staged
+  }
+  if (removed) log(`swept ${removed} expired screenshot(s) from ${IMG_DIR}`);
+}
+
 function saveImages(images: PickImage[] | undefined): string[] {
   const paths: string[] = [];
+  // Throttled, so a long-running session does not accumulate a week of screenshots
+  // behind it; session start forces a sweep, so a restart always collects.
+  sweepStaleImages();
   (images ?? []).forEach((img, i) => {
     const m = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(img?.dataUrl ?? '');
     if (!m) return;
@@ -467,6 +526,7 @@ export default function (pi: ExtensionAPI): void {
     const port = typeof addr === 'object' && addr ? addr.port : 0;
     mkdirSync(REG_DIR, { recursive: true });
     sweepStaleRegistry();
+    sweepStaleImages(true);
     regFile = join(REG_DIR, `${process.pid}.json`);
     writeFileSync(
       regFile,
