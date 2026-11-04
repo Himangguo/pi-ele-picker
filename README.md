@@ -110,10 +110,10 @@ The launcher starts in the **bottom-right** corner and stays out of the way:
 Vite reloads the page every time you save a file, so the composer is mirrored into `sessionStorage` and re-attached on the next load:
 
 - The description and any attached screenshots come back exactly as they were.
+- The captured element is **snapshotted at pick time and persisted with the draft**, so the element data survives the node being unmounted, an SPA route change, or the reload itself.
 - The captured element is **re-resolved from its selector**, so after an HMR update you land straight back in the panel on the same element — no re-pick.
 - Closing the panel with **✕** also suppresses the automatic reopen; the draft stays reachable through the launcher's hover.
-- If the element is genuinely gone (unmounted, renamed), the words are still restored and the panel says so — picking a new element attaches the existing text to it.
-- Sending is refused while the panel points at an element that has left the page, so a stale pick can never ship a description of nothing. A replaced node under the same selector (the usual HMR case) is picked up automatically instead.
+- **Sending never depends on the element still being on the page.** Pick a button, go copy something from another route, then send — the description goes out with the element as it was when you picked it. A live read is used instead while you are still on the pick-time page, so an HMR swap of the same node is described in its current state; after a route change the snapshot wins, so a lookalike behind the same selector cannot be mistaken for your pick. When a snapshot was used, the status line says so.
 - The draft is per tab and per path (`sessionStorage`, not `localStorage`), and one older than 24h is discarded. A successful send clears it.
 - Screenshots that exceed the ~5MB `sessionStorage` quota are dropped from the draft with a notice rather than silently lost; the description is always kept.
 

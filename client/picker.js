@@ -155,6 +155,12 @@
   // The selector `target` was captured through. Kept so the draft can be
   // re-attached after a reload replaces the DOM node `target` points at.
   var targetSelector = null;
+  // Everything about the target captured at pick time. Sending must not depend on
+  // the node still being on the page — see elementPayload().
+  var targetSnapshot = null;
+  // The URL the target was picked on. A selector only identifies an element within
+  // one document: after a route change the same selector may hit a lookalike.
+  var targetUrl = null;
   var shots = [];
   // Set when a pick commits on pointerdown; swallows the follow-up click so the
   // page (links, buttons) never reacts to the click that finished the pick.
@@ -491,12 +497,20 @@
     }
   }
 
-  /** Re-show the panel for the element already captured — no re-pick, no overwrite. */
+  /**
+   * Re-show the panel for the element already captured — no re-pick, no overwrite.
+   *
+   * A snapshot is enough to reopen: the developer may have navigated away from the
+   * page that element lives on, and losing access to their own draft over that
+   * would be the wrong trade. The highlight is simply skipped when there is
+   * nothing on screen to outline.
+   */
   function openPanel() {
     var el = resolveTarget();
-    if (!el) return false;
+    if (!el && !targetSnapshot) return false;
     panel.classList.add('open');
-    showHighlight(el);
+    if (el) showHighlight(el);
+    else hideHighlight();
     positionPanel();
     return true;
   }
@@ -504,6 +518,8 @@
   function select(el) {
     target = el;
     targetSelector = cssPath(el);
+    targetSnapshot = describe(el);
+    targetUrl = location.href;
     // A new pick re-arms the draft: the user is working again, so a reload must
     // bring the panel back even if they closed it earlier.
     panelDismissed = false;
@@ -512,6 +528,14 @@
     saveDraft();
     taEl.focus();
   }
+
+  /**
+   * The element description handed to the bridge is chosen in send(), because the
+   * choice between a live read and the snapshot has to be reported to the user.
+   * Describing a detached node is never an option: `getComputedStyle()` and
+   * `getBoundingClientRect()` return nothing useful once it leaves the document, so
+   * the fallback has to be the captured value, not a fresh read.
+   */
 
   function vueLine(el) {
     var v = vueInfo(el);
@@ -729,10 +753,15 @@
     var rec = {
       selector: targetSelector,
       text: taEl.value,
+      // The element as it was when it was picked. Persisted because the reload
+      // that restores the draft is often the same one that removed the node —
+      // without this the send below could only go out with no element at all.
+      element: targetSnapshot,
+      url: targetUrl,
       dismissed: panelDismissed,
       savedAt: Date.now(),
     };
-    if (!rec.text && !rec.selector) {
+    if (!rec.text && !rec.selector && !rec.element) {
       // Nothing worth restoring — do not resurrect an empty panel on reload.
       clearDraft();
       return;
@@ -839,21 +868,26 @@
       }
     }
 
-    if (rec.selector) {
-      targetSelector = String(rec.selector);
-      var el = resolveTarget();
-      if (el) metaEl.innerHTML = '<code>' + escapeHtml(targetSelector) + '</code>' + vueLine(el);
-      else targetSelector = null; // keep the words, drop the dead reference
+    if (rec.selector) targetSelector = String(rec.selector);
+    if (rec.url) targetUrl = String(rec.url);
+    if (rec.element && typeof rec.element === 'object') targetSnapshot = rec.element;
+
+    var el = targetSelector ? resolveTarget() : null;
+    if (el) {
+      metaEl.innerHTML = '<code>' + escapeHtml(targetSelector) + '</code>' + vueLine(el);
+    } else if (targetSnapshot) {
+      // Still sendable: the snapshot carries everything the bridge needs.
+      metaEl.innerHTML =
+        '<code>' + escapeHtml(targetSelector || '') + '</code><br>' +
+        '上次选中的元素已不在页面中，发送时会带上抓取时的快照';
     }
 
     if (rec.dismissed) return;
-    if (target) {
-      openPanel();
-      return;
-    }
+    if (openPanel()) return;
     if (!taEl.value && !shots.length) return;
-    // The element is gone but the words survive: show the composer so the draft is
-    // visibly still there, and let the next pick attach it to a new element.
+    // No element at all (not even a snapshot) but there are words: show the
+    // composer so the draft is visibly still there, and let the next pick attach
+    // it to a new element.
     panel.classList.add('open');
     metaEl.textContent = '上次选中的元素已不在页面中，请重新点击选择';
     positionPanel();
@@ -875,14 +909,16 @@
   }
 
   /** POST the payload to the bridge. Never rejects; status 0 means the fetch itself failed. */
-  function deliver(c, submit) {
+  function deliver(c, submit, element) {
     var payload = {
       text: taEl.value,
       images: shots.map(function (d, i) {
         return { name: 'shot-' + i + '.png', dataUrl: d };
       }),
-      element: describe(target),
-      url: location.href,
+      element: element,
+      // The page the element lives on, which is not necessarily the page that is
+      // open right now.
+      url: targetUrl || location.href,
       title: document.title,
       submit: !!submit,
     };
@@ -919,12 +955,32 @@
   }
 
   function send(submit) {
-    // The picked node can be detached by an HMR update while the panel stays open
-    // on it; describing a dead node would ship a description of nothing.
-    if (!resolveTarget()) {
-      setStatus('目标元素已不在页面中，请重新点击选择元素', 'err');
+    // Deliberately NOT gated on the element still being on the page. Picking an
+    // element and then wandering off to another route to copy something is a
+    // normal way to work, and blocking the send there throws away the words the
+    // developer typed.
+    //
+    // Two sources for the element, and the wrong one silently corrupts the payload:
+    // the snapshot captured at pick time (a plain value, so it survives an unmount,
+    // an SPA route change or a reload), and a live read of whatever the selector
+    // resolves to now. A live read wins only while we are still on the pick-time
+    // URL — an HMR swap of the same element is the case that needs it, while a
+    // route change can put an unrelated lookalike behind the same selector.
+    var live = resolveTarget();
+    var samePage = targetUrl === null || location.href === targetUrl;
+    var element = live && samePage ? describe(live) : targetSnapshot;
+    if (element) targetSnapshot = element;
+
+    if (!element && !taEl.value.trim()) {
+      setStatus('请先点击页面元素，或写下要改什么', 'err');
       return;
     }
+
+    // Only ever affects the status line, never whether the send happens.
+    var note = '';
+    if (element && !live) note = '（元素已不在页面中，已附抓取时的快照）';
+    else if (element && !samePage) note = '（页面已切换，已附抓取时的元素快照）';
+
     sendBtn.disabled = true;
     sendNowBtn.disabled = true;
     setStatus(submit ? '直接发送中…' : '写入中…');
@@ -932,7 +988,7 @@
     function attempt(forceFresh) {
       return loadConfig(forceFresh).then(function (c) {
         if (!c || !c.port) return { status: 0, body: null, noBridge: true };
-        return deliver(c, submit);
+        return deliver(c, submit, element);
       });
     }
 
@@ -950,10 +1006,17 @@
           return;
         }
         if (out.body && out.body.ok) {
+          // Say which element went out, so a stale pick is visible rather than silent.
           if (out.body.submitted) {
-            setStatus(out.body.queued ? '已发送 ✓（agent 忙碌，已排队为后续任务）' : '已直接发送给 pi 并开始执行 ✓', 'ok');
+            setStatus(
+              (out.body.queued ? '已发送 ✓（agent 忙碌，已排队为后续任务）' : '已直接发送给 pi 并开始执行 ✓') + note,
+              'ok'
+            );
           } else {
-            setStatus(out.body.inserted ? '已写入 pi 输入框 ✓（去终端按回车发送）' : '已发送给 pi ✓', 'ok');
+            setStatus(
+              (out.body.inserted ? '已写入 pi 输入框 ✓（去终端按回车发送）' : '已发送给 pi ✓') + note,
+              'ok'
+            );
           }
           taEl.value = '';
           shots = [];
