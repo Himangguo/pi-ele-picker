@@ -1,0 +1,40 @@
+name: Test
+
+# Regression suite for the browser client: a throwaway Vite dev server plus
+# Playwright. It runs against `src/` and `client/` directly, so a broken client
+# fails here without anyone having to build first.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+
+      # CI has no installed Chrome to borrow, so it uses Playwright's pinned build.
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - run: npm test
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-results
+          path: test-results/
+          retention-days: 7

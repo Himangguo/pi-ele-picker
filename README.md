@@ -154,6 +154,18 @@ The same payload is available from the bridge directly:
 - If pi restarts while a page is open (new random port + token), the next send re-discovers the bridge and retries once automatically — no page refresh needed. The status poll does the same: a stale port flips to `offline` for one cycle, then rediscovers.
 - The bridge never auto-submits on its own: **写入pi输入框** only fills the editor; **直接发送** is an explicit user action in the page.
 
+## Development
+
+```bash
+npm install
+npm test        # end-to-end suite; starts its own Vite dev server
+npm run typecheck
+```
+
+The suite drives the real browser client inside [`test/fixture`](test/fixture), a throwaway Vite app: it picks elements, types descriptions, attaches screenshots and reloads, then asserts the draft survived. It runs against `src/` and `client/` directly — no build step is needed first, and a broken client fails the tests rather than the published package.
+
+Local runs drive your installed Chrome. To use Playwright's pinned Chromium instead, run `npx playwright install chromium` once and set `PW_BUNDLED=1`; CI always uses the pinned build. `npx playwright test --ui` and `--debug` work as usual, and a failing run keeps a trace in `test-results/`.
+
 ## Releasing
 
 Publishing is token-free: `.github/workflows/release.yml` publishes with **Trusted Publishing (OIDC)**, so `npm publish` authenticates through a short-lived OIDC token minted by GitHub Actions and provenance is attached automatically.

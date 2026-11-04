@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>pi-ele-picker fixture</title>
+    <!-- A module script in <head> runs before the picker's body-injected one, so
+         app.js can settle the DOM before the picker's draft restore pass. -->
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <h1>fixture</h1>
+    <button id="save" class="btn primary">保存</button>
+    <div id="gone" class="temp">dropped when the page is opened with ?omit=gone</div>
+  </body>
+</html>

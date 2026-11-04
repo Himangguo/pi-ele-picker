@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // The spec files are Node code, but `page.evaluate()` callbacks run in the
+    // browser, so they need the DOM lib to typecheck the page-side snippets.
+    "lib": ["ES2022", "DOM"],
+    // test/fixture/vite.config.ts imports the plugin's TypeScript source directly
+    // (never the built output), so the extension is part of the specifier.
+    "allowImportingTsExtensions": true
+  },
+  "include": ["test", "playwright.config.ts"]
+}
