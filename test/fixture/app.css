@@ -1,0 +1,16 @@
+/* Fixture stylesheet.
+ *
+ * Vite injects this as `<style data-vite-dev-id="/app.css">`, which is what the
+ * picker's style tracer reads: `#save`'s background-color below must be
+ * attributed to this file (and this line) in the panel and the payload.
+ */
+#save {
+  background-color: #2563eb;
+  color: #ffffff;
+  border-radius: 6px;
+}
+
+.card {
+  display: flex;
+  gap: 8px;
+}

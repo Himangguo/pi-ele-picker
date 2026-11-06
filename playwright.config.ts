@@ -31,5 +31,8 @@ export default defineConfig({
     url: `http://127.0.0.1:${PORT}/__pi_picker__/config`,
     reuseExistingServer: !process.env.CI,
     timeout: 30_000,
+    // `POST /__pi_picker__/open` spawns launch-editor. Use a harmless command so
+    // the endpoint can be tested end to end without opening an editor in CI.
+    env: { LAUNCH_EDITOR: 'echo' },
   },
 });

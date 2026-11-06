@@ -13,6 +13,7 @@
   window.__PI_PICKER__ = true;
 
   var CFG_URL = '/__pi_picker__/config';
+  var OPEN_URL = '/__pi_picker__/open';
   var cfg = { port: null, token: null };
 
   var STYLE_KEYS = [
@@ -72,6 +73,15 @@
     '.panel.dragging .hd { cursor: grabbing; }',
     '.meta { padding: 8px 12px 0; color: #9a9aa5; font-size: 11px; line-height: 1.5; word-break: break-all; }',
     '.meta code { color: #a5b4fc; }',
+    '.meta .comp { margin-top: 2px; }',
+    '.css { margin-top: 4px; display: flex; flex-direction: column; gap: 3px; }',
+    '.css-row { line-height: 1.45; }',
+    '.css-prop { color: #c4b5fd; }',
+    '.css-val { color: #e7e7ea; }',
+    '.css-sel { color: #a5b4fc; }',
+    '.css-inline { color: #9a9aa5; }',
+    '.src { display: inline; background: transparent; border: none; padding: 0; margin: 0; color: #67e8f9; font-size: 11px; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; word-break: normal; }',
+    '.src:hover { color: #a5f3fc; text-decoration-style: solid; }',
     'textarea { display: block; width: calc(100% - 24px); margin: 8px 12px 0; min-height: 72px; max-height: 200px; resize: vertical; background: #111218; color: #e7e7ea; border: 1px solid #34353d; border-radius: 8px; padding: 8px 10px; font-size: 13px; outline: none; }',
     'textarea:focus { border-color: #4f46e5; }',
     '.shots { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px 0; }',
@@ -523,7 +533,7 @@
     // A new pick re-arms the draft: the user is working again, so a reload must
     // bring the panel back even if they closed it earlier.
     panelDismissed = false;
-    metaEl.innerHTML = '<code>' + escapeHtml(targetSelector) + '</code>' + vueLine(el);
+    metaEl.innerHTML = metaHtml(targetSnapshot);
     openPanel();
     saveDraft();
     taEl.focus();
@@ -537,10 +547,86 @@
    * the fallback has to be the captured value, not a fresh read.
    */
 
-  function vueLine(el) {
-    var v = vueInfo(el);
-    if (v.componentFile) return '<br>组件: <code>' + escapeHtml((v.componentName ? v.componentName + ' ' : '') + v.componentFile) + '</code>';
-    return '';
+  function shortPath(p) {
+    var parts = String(p).split('/');
+    return parts.length > 2 ? parts.slice(-2).join('/') : String(p);
+  }
+
+  /** A clickable source chip; line `~` marks an offset into compiled SFC CSS. */
+  function srcButton(file, line, label) {
+    if (!file) return '';
+    var attrs = ' type="button" class="src" data-open="1" data-file="' + escapeHtml(file) + '"';
+    if (line) attrs += ' data-line="' + line + '"';
+    var title = '在编辑器中打开 ' + file + (line ? ':' + line : '');
+    return '<button' + attrs + ' title="' + escapeHtml(title) + '">' + escapeHtml(label || shortPath(file)) + '</button>';
+  }
+
+  function lineLabel(file, line, compiled) {
+    return shortPath(file) + (line ? (compiled ? ':~' : ':') + line : '');
+  }
+
+  /** The winning Vite-source rule per tracked property, e.g. background-color <- .btn. */
+  function propRows(winners) {
+    var keys = [];
+    for (var i = 0; i < STYLE_KEYS.length; i++) if (winners[STYLE_KEYS[i]]) keys.push(STYLE_KEYS[i]);
+    if (!keys.length) return '';
+    var html = '<div class="css">';
+    keys.forEach(function (k) {
+      var w = winners[k];
+      var src = w.inline
+        ? '<span class="css-inline">内联样式</span>'
+        : srcButton(w.file, w.line, lineLabel(w.file, w.line, w.compiled));
+      html +=
+        '<div class="css-row"><span class="css-prop">' + escapeHtml(k) + '</span>: <span class="css-val">' +
+        escapeHtml(w.value) + '</span> ' +
+        src +
+        '</div>';
+    });
+    return html + '</div>';
+  }
+
+  /** Fallback for old snapshots that only carry the matched source list. */
+  function sourceRows(sources) {
+    if (!sources || !sources.length) return '';
+    var html = '<div class="css">';
+    sources.slice(0, 4).forEach(function (s) {
+      var props = [];
+      Object.keys(s.declarations || {}).forEach(function (k) {
+        if (props.length < 4) props.push(k + ': ' + s.declarations[k]);
+      });
+      html +=
+        '<div class="css-row"><span class="css-sel">' + escapeHtml(s.selector) + '</span> ' +
+        srcButton(s.file, s.line, lineLabel(s.file, s.line, s.compiled)) +
+        (props.length ? '<br><span class="css-val">' + escapeHtml(props.join('; ')) + '</span>' : '') +
+        '</div>';
+    });
+    return html + '</div>';
+  }
+
+  function metaHtml(data) {
+    if (!data) return '';
+    var html = '<code>' + escapeHtml(data.selector || '') + '</code>';
+    if (data.componentFile) {
+      html +=
+        '<div class="comp">组件: ' +
+        srcButton(
+          data.componentFile,
+          null,
+          (data.componentName ? data.componentName + ' ' : '') + shortPath(data.componentFile)
+        ) +
+        '</div>';
+    }
+    if (data.styleWinners && Object.keys(data.styleWinners).length) html += propRows(data.styleWinners);
+    else if (data.styleSources && data.styleSources.length) html += sourceRows(data.styleSources);
+    return html;
+  }
+
+  function renderMeta(el) {
+    try {
+      metaEl.innerHTML = metaHtml(describe(el));
+    } catch (e) {
+      metaEl.innerHTML = '<code>' + escapeHtml(cssPath(el)) + '</code>';
+    }
   }
 
   function escapeHtml(s) {
@@ -596,6 +682,294 @@
     return {};
   }
 
+  /* --- style source tracing ------------------------------------------------
+   *
+   * Vite injects every dev stylesheet as `<style data-vite-dev-id="...">`,
+   * where the id is the source module URL, e.g.
+   *   /src/components/Foo.vue?vue&type=style&index=0&scoped=abc&lang.css
+   *
+   * That is the whole trick: the CSSOM already knows which rules match the
+   * element, and the id names the file they came from. Computed styles alone
+   * cannot answer "where do I edit this" — this can.
+   *
+   * Line numbers are located in the injected text because CSSOM exposes no
+   * positions. For a plain .css file that is the exact source line. For an SFC
+   * the injected text is the *compiled* style block, so the line is reported
+   * with a `~` as an offset into that block (the query in the dev id marks it).
+   */
+  var MAX_TRACED_RULES = 20000;
+  var MAX_TRACED_SOURCES = 8;
+
+  function stripDevQuery(id) {
+    var s = String(id);
+    var q = s.indexOf('?');
+    return q === -1 ? s : s.slice(0, q);
+  }
+
+  function escapeRegExp(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  /** Build a whitespace-tolerant pattern for a serialized selector. */
+  function selectorPattern(sel) {
+    var out = '';
+    var prevSpace = false;
+    for (var i = 0; i < sel.length; i++) {
+      var ch = sel.charAt(i);
+      if (/\s/.test(ch)) {
+        if (!prevSpace) out += '\\s+';
+        prevSpace = true;
+      } else if (ch === ',') {
+        out += ',\\s*';
+        prevSpace = false;
+      } else {
+        out += escapeRegExp(ch);
+        prevSpace = false;
+      }
+    }
+    return out;
+  }
+
+  function countNewlines(text, from, to) {
+    var n = 0;
+    for (var i = from; i < to; i++) if (text.charCodeAt(i) === 10) n++;
+    return n;
+  }
+
+  /**
+   * Blank out comments while preserving every offset and newline.
+   *
+   * Rule positions are found by searching the stylesheet text, and a selector
+   * mentioned in a comment (`the #save rule below …`) would otherwise be located
+   * instead of the real rule. Replacing comment characters with spaces keeps the
+   * line count and the column offsets intact.
+   */
+  function blankComments(text) {
+    return text.replace(/\/\*[\s\S]*?\*\//g, function (m) {
+      return m.replace(/[^\n]/g, ' ');
+    });
+  }
+
+  /** Locate a rule by selector, advancing a cursor so repeated selectors map in order. */
+  function locateRule(text, selectorText, cursor) {
+    if (!text) return null;
+    var pattern;
+    try {
+      pattern = new RegExp(selectorPattern(selectorText), 'g');
+    } catch (e) {
+      return null;
+    }
+    pattern.lastIndex = cursor.index;
+    var m = pattern.exec(text);
+    if (!m) return null;
+    cursor.line += countNewlines(text, cursor.index, m.index);
+    cursor.index = m.index + m[0].length;
+    return cursor.line;
+  }
+
+  /** Pseudo-elements cannot be matched by Element.matches(); drop them. */
+  function matchableSelector(selectorText) {
+    return selectorText
+      .replace(/::(before|after|first-line|first-letter|selection|placeholder|marker|backdrop|file-selector-button)\b/gi, '')
+      .replace(/:(before|after|first-line|first-letter)\b/gi, '')
+      .trim();
+  }
+
+  function selectorMatches(el, selectorText) {
+    var sel = matchableSelector(selectorText);
+    if (!sel) return false;
+    try {
+      return el.matches(sel);
+    } catch (e) {
+      return false; // invalid or unsupported selector
+    }
+  }
+
+  function groupMatches(rule) {
+    var name = rule.constructor && rule.constructor.name;
+    if (name === 'CSSMediaRule') {
+      try {
+        return window.matchMedia(rule.media.mediaText).matches;
+      } catch (e) {
+        return true;
+      }
+    }
+    if (name === 'CSSSupportsRule') {
+      try {
+        return !window.CSS || !CSS.supports || CSS.supports(rule.conditionText);
+      } catch (e) {
+        return true;
+      }
+    }
+    // @layer and @container: assume they apply rather than hiding a real source.
+    return true;
+  }
+
+  function readDeclarations(rule) {
+    var out = {};
+    for (var i = 0; i < STYLE_KEYS.length; i++) {
+      var k = STYLE_KEYS[i];
+      var v = rule.style && rule.style.getPropertyValue(k);
+      if (v) out[k] = v;
+    }
+    return out;
+  }
+
+  /** Crude specificity (a*10000 + b*100 + c) — enough to order the cascade. */
+  function specificity(selectorText) {
+    var a = 0;
+    var b = 0;
+    var c = 0;
+    var s = selectorText.replace(/"[^"]*"|'[^']*'/g, '');
+    s = s.replace(/\[[^\]]*\]/g, function () {
+      b++;
+      return '';
+    });
+    s = s.replace(/#[\w-]+/g, function () {
+      a++;
+      return '';
+    });
+    s = s.replace(/\.[\w-]+/g, function () {
+      b++;
+      return '';
+    });
+    s = s.replace(/::[\w-]+/g, function () {
+      c++;
+      return '';
+    });
+    s = s.replace(/:([\w-]+)(\([^)]*\))?/g, function () {
+      b++;
+      return '';
+    });
+    s = s.replace(/[\w-]+/g, function () {
+      c++;
+      return '';
+    });
+    return a * 10000 + b * 100 + c;
+  }
+
+  function walkSheet(rules, el, devId, text, cursor, bucket, active) {
+    for (var i = 0; i < rules.length; i++) {
+      if (bucket.count >= MAX_TRACED_RULES) return;
+      var rule = rules[i];
+      if (rule.style && typeof rule.selectorText === 'string') {
+        bucket.count++;
+        var line = locateRule(text, rule.selectorText, cursor);
+        if (active && selectorMatches(el, rule.selectorText)) {
+          var decls = readDeclarations(rule);
+          if (Object.keys(decls).length) {
+            bucket.list.push({
+              file: stripDevQuery(devId),
+              line: line || null,
+              compiled: String(devId).indexOf('?') !== -1,
+              selector: rule.selectorText,
+              specificity: specificity(rule.selectorText),
+              declarations: decls,
+            });
+          }
+        }
+      } else if (rule.cssRules) {
+        walkSheet(rule.cssRules, el, devId, text, cursor, bucket, active && groupMatches(rule));
+      }
+    }
+  }
+
+  /** All Vite-source rules matching `el`, plus the winning source per property. */
+  function styleTrace(el) {
+    var bucket = { count: 0, list: [] };
+    var sheets = document.styleSheets;
+    for (var i = 0; i < sheets.length && bucket.count < MAX_TRACED_RULES; i++) {
+      var sheet = sheets[i];
+      var node = sheet.ownerNode;
+      if (!node || node.nodeType !== 1 || !node.getAttribute) continue;
+      var devId = node.getAttribute('data-vite-dev-id');
+      if (!devId) continue;
+      var rules;
+      try {
+        rules = sheet.cssRules;
+      } catch (e) {
+        continue; // cross-origin sheet: unreadable by design
+      }
+      if (!rules) continue;
+      walkSheet(rules, el, devId, blankComments(node.textContent || ''), { index: 0, line: 1 }, bucket, true);
+    }
+
+    // Low specificity first, later rules last: the last write per property wins.
+    var ordered = bucket.list
+      .map(function (source, order) {
+        return { source: source, order: order };
+      })
+      .sort(function (x, y) {
+        return x.source.specificity - y.source.specificity || x.order - y.order;
+      });
+
+    var winners = {};
+    ordered.forEach(function (entry) {
+      Object.keys(entry.source.declarations).forEach(function (key) {
+        winners[key] = {
+          file: entry.source.file,
+          line: entry.source.line,
+          compiled: entry.source.compiled,
+          selector: entry.source.selector,
+          value: entry.source.declarations[key],
+        };
+      });
+    });
+
+    var sources = ordered
+      .slice()
+      .reverse()
+      .slice(0, MAX_TRACED_SOURCES)
+      .map(function (entry) {
+        return entry.source;
+      });
+
+    return { sources: sources, winners: winners };
+  }
+
+  /** Only the element's own text, never a wrapper's whole subtree of copy. */
+  function directText(el) {
+    var parts = [];
+    for (var n = el.firstChild; n; n = n.nextSibling) {
+      if (n.nodeType === 3) {
+        var t = String(n.nodeValue || '').replace(/\s+/g, ' ').trim();
+        if (t) parts.push(t);
+      }
+    }
+    return parts.join(' ').slice(0, 160);
+  }
+
+  function classSuffix(el) {
+    if (!el.classList || !el.classList.length) return '';
+    return '.' + Array.prototype.slice.call(el.classList, 0, 4).join('.');
+  }
+
+  /**
+   * One level of structure, not the whole subtree.
+   *
+   * `outerHTML` on a card is thousands of characters of grandchildren, inline SVG
+   * and nested markup — the useful part (this layer's tag/classes and the shape
+   * of its direct children) drowns. This keeps exactly that shell, collapses
+   * repeated siblings, and stays tiny.
+   */
+  function skeleton(el) {
+    var head = el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + classSuffix(el);
+    var kids = [];
+    var seen = {};
+    for (var i = 0; i < el.children.length; i++) {
+      var child = el.children[i];
+      var key = child.tagName.toLowerCase() + (child.id ? '#' + child.id : '') + classSuffix(child);
+      if (seen[key]) continue;
+      seen[key] = true;
+      kids.push(key);
+      if (kids.length >= 12) {
+        kids.push('…');
+        break;
+      }
+    }
+    return head + (kids.length ? ' > ' + kids.join(', ') : '');
+  }
+
   function stylesOf(el) {
     var cs = window.getComputedStyle(el);
     var out = {};
@@ -611,18 +985,41 @@
     if (!el) return undefined;
     var r = el.getBoundingClientRect();
     var v = vueInfo(el);
-    var text = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 200);
+    var trace = styleTrace(el);
+    // A `style="..."` declaration beats any stylesheet rule and has no source
+    // file. Say so instead of pointing at a rule that is not actually winning.
+    var winners = trace.winners;
+    if (el.style && el.style.length) {
+      var merged = {};
+      Object.keys(winners).forEach(function (k) {
+        merged[k] = winners[k];
+      });
+      for (var wi = 0; wi < STYLE_KEYS.length; wi++) {
+        var wk = STYLE_KEYS[wi];
+        var wv = el.style.getPropertyValue(wk);
+        if (wv) merged[wk] = { inline: true, value: wv };
+      }
+      winners = merged;
+    }
+    // Prefer the element's own text. A wrapper's `textContent` is the whole
+    // page's copy, which tells the agent nothing about the thing that was picked;
+    // only fall back to it for a leaf with no direct text node at all.
+    var text = directText(el);
+    if (!text && !el.children.length) text = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 120);
     return {
       selector: cssPath(el),
       tag: el.tagName.toLowerCase(),
       id: el.id || undefined,
       classes: el.classList ? Array.prototype.slice.call(el.classList, 0, 8) : [],
       text: text || undefined,
-      htmlSnippet: el.outerHTML ? el.outerHTML.slice(0, 1500) : undefined,
+      // The shell, not the subtree: see skeleton().
+      structure: skeleton(el),
       rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
       styles: stylesOf(el),
       componentFile: v.componentFile,
       componentName: v.componentName,
+      styleSources: trace.sources,
+      styleWinners: winners,
     };
   }
 
@@ -874,12 +1271,20 @@
 
     var el = targetSelector ? resolveTarget() : null;
     if (el) {
-      metaEl.innerHTML = '<code>' + escapeHtml(targetSelector) + '</code>' + vueLine(el);
+      metaEl.innerHTML = targetSnapshot ? metaHtml(targetSnapshot) : '';
+      if (!metaEl.innerHTML) renderMeta(el);
     } else if (targetSnapshot) {
       // Still sendable: the snapshot carries everything the bridge needs.
       metaEl.innerHTML =
         '<code>' + escapeHtml(targetSelector || '') + '</code><br>' +
-        '上次选中的元素已不在页面中，发送时会带上抓取时的快照';
+        '上次选中的元素已不在页面中，发送时会带上抓取时的快照' +
+        (targetSnapshot.styleWinners || targetSnapshot.styleSources
+          ? '<div class="hint-css">' +
+            (targetSnapshot.styleWinners
+              ? propRows(targetSnapshot.styleWinners)
+              : sourceRows(targetSnapshot.styleSources)) +
+            '</div>'
+          : '');
     }
 
     if (rec.dismissed) return;
@@ -905,6 +1310,38 @@
       })
       .catch(function () {
         return { port: null, token: null };
+      });
+  }
+
+  /** Ask the Vite plugin to open a source file at the reported line. */
+  function openSource(file, line) {
+    if (!file) return;
+    var where = shortPath(file) + (line ? ':' + line : '');
+    setStatus('正在打开 ' + where + ' …');
+    fetch(OPEN_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ file: file, line: line || null, column: 1 }),
+    })
+      .then(function (r) {
+        return r
+          .json()
+          .then(function (j) {
+            return { status: r.status, body: j };
+          })
+          .catch(function () {
+            return { status: r.status, body: null };
+          });
+      })
+      .then(function (out) {
+        if (out.status === 200 && out.body && out.body.ok) {
+          setStatus('已在编辑器中打开 ' + where + ' ✓', 'ok');
+        } else {
+          setStatus('打开源码失败: ' + ((out.body && out.body.error) || 'HTTP ' + out.status), 'err');
+        }
+      })
+      .catch(function (e) {
+        setStatus('打开源码失败: ' + String((e && e.message) || e), 'err');
       });
   }
 
@@ -1074,6 +1511,14 @@
       return;
     }
     setPicking(!picking);
+  });
+  metaEl.addEventListener('click', function (e) {
+    var node = e.target;
+    var btn = node && node.closest ? node.closest('.src[data-open]') : null;
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openSource(btn.getAttribute('data-file'), Number(btn.getAttribute('data-line')) || undefined);
   });
   closeBtn.addEventListener('click', function () {
     panel.classList.remove('open');

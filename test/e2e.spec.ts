@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 
 /**
  * Regression tests for the browser client, driven through a real Vite dev server.
@@ -185,7 +186,7 @@ test('a replaced node under the same selector is described live', async ({ page 
   await expect(page.locator(STATUS)).toContainText('已写入 pi 输入框');
   // The snapshot still says 保存; only a live read can know about the swap.
   expect(posts[0].element.text).toBe('保存 HMR');
-  expect(posts[0].element.htmlSnippet).toContain('保存 HMR');
+  expect(posts[0].element.structure).toContain('button#save');
 });
 
 test('the draft survives a reload that removed the element, and still sends', async ({ page }) => {
@@ -273,6 +274,70 @@ test('closing the panel also suppresses the reopen on reload', async ({ page }) 
   await page.locator(TRIGGER).hover();
   await expect(page.locator(PANEL)).toHaveClass(/open/);
   await expect(page.locator(TEXTAREA)).toHaveValue('关掉面板后刷新不该自己弹出来');
+});
+
+test('attributes a matched style to its Vite source and opens it on click', async ({ page }) => {
+  const opened: Record<string, any>[] = [];
+  await page.route('**/__pi_picker__/open', async (route) => {
+    opened.push(route.request().postDataJSON());
+    await route.fulfill({ json: { ok: true } });
+  });
+  await open(page);
+  await pick(page, '#save');
+
+  // app.css sets #save's background-color; the panel must name that file and the
+  // line of the matching rule, not just show the computed value.
+  const row = page.locator('.panel .css-row').filter({ hasText: 'background-color' }).first();
+  await expect(row).toContainText('app.css');
+  // A selector mentioned in a comment must not win the line lookup; the chip has
+  // to point at the actual `#save {` rule, not the prose above it.
+  const expectedLine =
+    readFileSync('test/fixture/app.css', 'utf8')
+      .split('\n')
+      .findIndex((line) => line.trim() === '#save {') + 1;
+  expect(Number(await row.locator('button.src').getAttribute('data-line'))).toBe(expectedLine);
+
+  await row.locator('button.src').click();
+  await expect.poll(() => opened.length).toBe(1);
+  expect(opened[0].file).toContain('app.css');
+  expect(opened[0].line).toBeGreaterThan(0);
+});
+
+test('the payload structure is one level deep and text is the element own', async ({ page }) => {
+  const posts = await mockBridge(page);
+  await open(page);
+  await pick(page, '#card');
+  await page.locator(TEXTAREA).fill('把这张卡片的间距改大');
+  await page.locator('.panel .send').click();
+
+  await expect(page.locator(STATUS)).toContainText('已写入 pi 输入框');
+  const el = posts[0].element;
+
+  // Shell + direct children only. Repetition collapses, descendants are absent.
+  expect(el.structure).toBe('div#card.card > span.title, span.desc');
+  expect(el.structure).not.toContain('<');
+  expect(el.structure.match(/span\.desc/g)).toHaveLength(1);
+
+  // The wrapper has no text of its own; neither child copy nor page copy leaks in.
+  expect(el.text).toBeUndefined();
+
+  // And the CSS source for the card shipped with the payload.
+  expect(el.styleSources.some((s: any) => s.file.includes('app.css'))).toBe(true);
+});
+
+test('the open endpoint refuses traversal and missing files', async ({ request }) => {
+  const missing = await request.post('/__pi_picker__/open', { data: { file: '/nope.css', line: 1 } });
+  expect(missing.status()).toBe(404);
+
+  // An existing file outside the project root must not be reachable.
+  const traversal = await request.post('/__pi_picker__/open', {
+    data: { file: '/../../../../etc/passwd', line: 1 },
+  });
+  expect([403, 404]).toContain(traversal.status());
+
+  const ok = await request.post('/__pi_picker__/open', { data: { file: '/app.css', line: 2 } });
+  expect(ok.status()).toBe(200);
+  expect((await ok.json()).ok).toBe(true);
 });
 
 test('a draft older than a day is discarded', async ({ page }) => {

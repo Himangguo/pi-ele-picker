@@ -205,11 +205,26 @@ interface PickElement {
   id?: string;
   classes?: string[];
   text?: string;
-  htmlSnippet?: string;
+  /** One-level shell skeleton: tag/id/classes + direct children, not full HTML. */
+  structure?: string;
   rect?: { x: number; y: number; w: number; h: number };
   styles?: Record<string, string>;
   componentFile?: string;
   componentName?: string;
+  /** Matched Vite stylesheet rules, most specific first. */
+  styleSources?: Array<{
+    file?: string;
+    line?: number | null;
+    /** True when the line is an offset into a compiled SFC style block. */
+    compiled?: boolean;
+    selector?: string;
+    declarations?: Record<string, string>;
+  }>;
+  /** Winning source per tracked property (inline styles have no file). */
+  styleWinners?: Record<
+    string,
+    { file?: string; line?: number | null; compiled?: boolean; selector?: string; value?: string; inline?: boolean }
+  >;
 }
 interface PickPayload {
   text?: string;
@@ -297,7 +312,25 @@ function compose(payload: PickPayload, imagePaths: string[]): string {
   if (el.styles && Object.keys(el.styles).length) {
     lines.push(`关键样式: ${Object.entries(el.styles).map(([k, v]) => `${k}: ${v}`).join('; ')}`);
   }
-  if (el.htmlSnippet) lines.push(`HTML 片段:\n\`\`\`html\n${el.htmlSnippet}\n\`\`\``);
+  if (el.structure) lines.push(`结构骨架: ${el.structure}`);
+  if (el.styleWinners && Object.keys(el.styleWinners).length) {
+    lines.push('样式归属（每个属性的生效来源）:');
+    for (const [key, w] of Object.entries(el.styleWinners)) {
+      const at = w.line ? `:${w.compiled ? '~' : ''}${w.line}` : '';
+      const from = w.inline ? '内联样式' : `${w.file ?? '?'}${at}`;
+      lines.push(`- ${key}: ${w.value ?? '?'}  ←  ${from}${w.selector ? `  (${w.selector})` : ''}`);
+    }
+  }
+  if (el.styleSources && el.styleSources.length) {
+    lines.push('命中规则（改样式时优先改这些位置）:');
+    for (const s of el.styleSources.slice(0, 8)) {
+      const props = Object.entries(s.declarations ?? {})
+        .map(([k, v]) => `${k}: ${v}`)
+        .join('; ');
+      const at = s.line ? `:${s.compiled ? '~' : ''}${s.line}` : '';
+      lines.push(`- ${s.file ?? '?'}${at}  ${s.selector ?? ''}${props ? `  →  ${props}` : ''}`);
+    }
+  }
   if (imagePaths.length) {
     lines.push(`截图文件（请用 Read 工具查看）:\n${imagePaths.map((f) => `- ${f}`).join('\n')}`);
   }

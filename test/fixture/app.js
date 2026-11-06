@@ -1,3 +1,5 @@
+import './app.css';
+
 /**
  * The fixture app the picker is exercised against.
  *

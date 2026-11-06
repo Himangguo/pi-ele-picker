@@ -78,6 +78,9 @@ piElePicker({
   // the status poll costs one loopback request every 3s, so users opt in from the
   // picker panel unless you flip this on for them.
   status: false,
+  // Serve POST /__pi_picker__/open, used by the clickable source chips in the
+  // panel. Set to false to keep the picker fully read-only.
+  openInEditor: true,
 });
 ```
 
@@ -146,6 +149,49 @@ The same payload is available from the bridge directly:
 ```
 
 `/status` needs no token, but non-local browser origins get `403`, so an arbitrary website cannot probe session metadata. "Local" covers `localhost` / `*.localhost`, `127.0.0.0/8`, `0.0.0.0`, `[::1]`, and private or link-local IPv4 literals (`10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`, `169.254.x.x`) — so a dev server you open over your machine's LAN IPv4 address (Vite binds `0.0.0.0` by default) works, while an arbitrary site does not.
+
+### Style source tracing
+
+Computed styles answer *what* the element looks like; they cannot answer *where to
+edit it*. The picker goes one level deeper and reports **which source file and line
+the matching CSS rule came from**.
+
+Vite injects every dev stylesheet as `<style data-vite-dev-id="/src/...">`, and
+that id is the module URL. For the picked element the picker walks
+`document.styleSheets`, keeps only those Vite sheets, and tests each rule with
+`el.matches(rule.selectorText)` (following `@media` / `@supports` so a rule that
+does not currently apply is not attributed). The panel then shows, for every tracked
+property, the winning rule and a clickable `file:line` chip:
+
+```
+background-color: #2563eb    src/components/Foo.vue:12
+```
+
+The same information ships to the agent as `styleSources`, so a prompt like "把这个
+按钮改成主色" arrives with the exact file to open instead of 19 computed values.
+
+Line numbers are located inside the injected stylesheet text. For a plain `.css`
+file they are exact; for an SFC the injected text is the **compiled** style block, so
+the line is shown as `:~12` (an offset into that block) rather than pretending to be
+the `.vue` line. A `style="..."` declaration has no source file, so it is labelled
+`内联样式` instead of pointing at a rule that is not actually winning.
+
+### Open in editor
+
+The `file:line` chips are clickable. Clicking one asks the Vite plugin to open that
+file at the line in your editor:
+
+```jsonc
+// POST /__pi_picker__/open
+{ "file": "/src/components/Foo.vue", "line": 12, "column": 1 }
+// -> { "ok": true, "file": "/abs/path/src/components/Foo.vue", "line": 12, "column": 1 }
+```
+
+It uses [`launch-editor`](https://github.com/vitejs/launch-editor), so it detects the
+editor you already have running (VS Code, Cursor, WebStorm, Sublime, vim, …) and
+honours `LAUNCH_EDITOR` / `EDITOR`. The endpoint is dev-only, accepts `POST` +
+JSON only, requires a local `Origin`/`Host` (a foreign website cannot drive it),
+and refuses any path outside the Vite project root.
 
 ## Notes
 
