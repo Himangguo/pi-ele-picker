@@ -153,39 +153,42 @@ The same payload is available from the bridge directly:
 ### Style source tracing
 
 Computed styles answer *what* the element looks like; they cannot answer *where to
-edit it*. The picker goes one level deeper and reports **which source file and line
-the matching CSS rule came from**.
+edit it*. The picker goes one level deeper and reports **which source file the
+matching CSS rule came from**.
 
 Vite injects every dev stylesheet as `<style data-vite-dev-id="/src/...">`, and
 that id is the module URL. For the picked element the picker walks
 `document.styleSheets`, keeps only those Vite sheets, and tests each rule with
 `el.matches(rule.selectorText)` (following `@media` / `@supports` so a rule that
 does not currently apply is not attributed). The panel then shows, for every tracked
-property, the winning rule and a clickable `file:line` chip:
+property, the winning rule and a clickable file chip:
 
 ```
-background-color: #2563eb    src/components/Foo.vue:12
+background-color: #2563eb    src/components/Foo.vue
 ```
 
-The same information ships to the agent as `styleSources`, so a prompt like "把这个
-按钮改成主色" arrives with the exact file to open instead of 19 computed values.
+Only the file is reported, never a line number. Vite compiles CSS (SCSS/Less, Vue
+scoped styles, Tailwind, PostCSS, inlined `@import`), so a line counted in the
+injected `<style>` would point at the wrong place in the source file. An inline
+`style="..."` declaration has no source file, so it is labelled `内联样式` instead of
+pointing at a rule that is not actually winning.
 
-Line numbers are located inside the injected stylesheet text. For a plain `.css`
-file they are exact; for an SFC the injected text is the **compiled** style block, so
-the line is shown as `:~12` (an offset into that block) rather than pretending to be
-the `.vue` line. A `style="..."` declaration has no source file, so it is labelled
-`内联样式` instead of pointing at a rule that is not actually winning.
+The same information ships to the agent as `styleSources` / `styleWinners`, so a
+prompt like "把这个按钮改成主色" arrives with the exact file to open instead of 19
+computed values.
 
 ### Open in editor
 
-The `file:line` chips are clickable. Clicking one asks the Vite plugin to open that
-file at the line in your editor:
+Clicking a file chip asks the Vite plugin to open that file in your editor:
 
 ```jsonc
 // POST /__pi_picker__/open
-{ "file": "/src/components/Foo.vue", "line": 12, "column": 1 }
-// -> { "ok": true, "file": "/abs/path/src/components/Foo.vue", "line": 12, "column": 1 }
+{ "file": "/src/components/Foo.vue" }
+// -> { "ok": true, "file": "/abs/path/src/components/Foo.vue" }
 ```
+
+It opens the file itself, not a line, for the same reason line numbers are not
+shown: the position in the compiled stylesheet does not map to the source.
 
 It uses [`launch-editor`](https://github.com/vitejs/launch-editor), so it detects the
 editor you already have running (VS Code, Cursor, WebStorm, Sublime, vim, …) and

@@ -214,17 +214,11 @@ interface PickElement {
   /** Matched Vite stylesheet rules, most specific first. */
   styleSources?: Array<{
     file?: string;
-    line?: number | null;
-    /** True when the line is an offset into a compiled SFC style block. */
-    compiled?: boolean;
     selector?: string;
     declarations?: Record<string, string>;
   }>;
   /** Winning source per tracked property (inline styles have no file). */
-  styleWinners?: Record<
-    string,
-    { file?: string; line?: number | null; compiled?: boolean; selector?: string; value?: string; inline?: boolean }
-  >;
+  styleWinners?: Record<string, { file?: string; selector?: string; value?: string; inline?: boolean }>;
 }
 interface PickPayload {
   text?: string;
@@ -316,19 +310,17 @@ function compose(payload: PickPayload, imagePaths: string[]): string {
   if (el.styleWinners && Object.keys(el.styleWinners).length) {
     lines.push('样式归属（每个属性的生效来源）:');
     for (const [key, w] of Object.entries(el.styleWinners)) {
-      const at = w.line ? `:${w.compiled ? '~' : ''}${w.line}` : '';
-      const from = w.inline ? '内联样式' : `${w.file ?? '?'}${at}`;
+      const from = w.inline ? '内联样式' : `${w.file ?? '?'}`;
       lines.push(`- ${key}: ${w.value ?? '?'}  ←  ${from}${w.selector ? `  (${w.selector})` : ''}`);
     }
   }
   if (el.styleSources && el.styleSources.length) {
-    lines.push('命中规则（改样式时优先改这些位置）:');
+    lines.push('命中规则（改样式时优先改这些文件）:');
     for (const s of el.styleSources.slice(0, 8)) {
       const props = Object.entries(s.declarations ?? {})
         .map(([k, v]) => `${k}: ${v}`)
         .join('; ');
-      const at = s.line ? `:${s.compiled ? '~' : ''}${s.line}` : '';
-      lines.push(`- ${s.file ?? '?'}${at}  ${s.selector ?? ''}${props ? `  →  ${props}` : ''}`);
+      lines.push(`- ${s.file ?? '?'}  ${s.selector ?? ''}${props ? `  →  ${props}` : ''}`);
     }
   }
   if (imagePaths.length) {

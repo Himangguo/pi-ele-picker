@@ -77,9 +77,9 @@ export interface PiElePickerOptions {
    */
   status?: boolean;
   /**
-   * Serve `POST /__pi_picker__/open`, which opens a matched source file at the
-   * reported line in the developer's editor (via `launch-editor`). Enabled by
-   * default; set to `false` to keep the picker fully read-only.
+   * Serve `POST /__pi_picker__/open`, which opens a matched source file in the
+   * developer's editor (via `launch-editor`). Enabled by default; set to `false`
+   * to keep the picker fully read-only.
    */
   openInEditor?: boolean;
 }
@@ -230,11 +230,6 @@ function readJsonBody(req: IncomingMessage, limit = 64 * 1024): Promise<Record<s
   });
 }
 
-function positiveInt(value: unknown): number | undefined {
-  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
-}
-
 function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -335,15 +330,15 @@ export default function piElePicker(options: PiElePickerOptions = {}): Plugin {
                 res.end(JSON.stringify({ ok: false, error: target.error }));
                 return;
               }
-              const line = positiveInt(body.line);
-              const column = positiveInt(body.column);
               try {
                 // Dynamic import keeps the dependency optional at runtime: a
                 // project without it still gets a clear error instead of a crash
                 // on server boot.
                 const { default: launchEditor } = await import('launch-editor');
-                const spec = line ? `${target.file}:${line}:${column ?? 1}` : target.file;
-                launchEditor(spec, (file, error) => {
+                // Open the file, not a line: Vite compiles CSS (SCSS/Vue scoped/
+                // Tailwind/PostCSS), so a line counted in the injected stylesheet
+                // would point at the wrong place in the source.
+                launchEditor(target.file, (file, error) => {
                   if (error) console.warn(`[pi-ele-picker] could not open ${file}: ${error}`);
                 });
               } catch (e) {
@@ -359,7 +354,7 @@ export default function piElePicker(options: PiElePickerOptions = {}): Plugin {
               }
               res.setHeader('content-type', 'application/json');
               res.setHeader('cache-control', 'no-store');
-              res.end(JSON.stringify({ ok: true, file: target.file, line: line ?? null, column: column ?? null }));
+              res.end(JSON.stringify({ ok: true, file: target.file }));
             })
             .catch((e: Error) => {
               res.statusCode = 400;

@@ -552,17 +552,13 @@
     return parts.length > 2 ? parts.slice(-2).join('/') : String(p);
   }
 
-  /** A clickable source chip; line `~` marks an offset into compiled SFC CSS. */
-  function srcButton(file, line, label) {
+  /** A clickable source chip. Only files are opened; compiled CSS has no
+   *  trustworthy line number to jump to. */
+  function srcButton(file, label) {
     if (!file) return '';
     var attrs = ' type="button" class="src" data-open="1" data-file="' + escapeHtml(file) + '"';
-    if (line) attrs += ' data-line="' + line + '"';
-    var title = '在编辑器中打开 ' + file + (line ? ':' + line : '');
+    var title = '在编辑器中打开 ' + file;
     return '<button' + attrs + ' title="' + escapeHtml(title) + '">' + escapeHtml(label || shortPath(file)) + '</button>';
-  }
-
-  function lineLabel(file, line, compiled) {
-    return shortPath(file) + (line ? (compiled ? ':~' : ':') + line : '');
   }
 
   /** The winning Vite-source rule per tracked property, e.g. background-color <- .btn. */
@@ -575,7 +571,7 @@
       var w = winners[k];
       var src = w.inline
         ? '<span class="css-inline">内联样式</span>'
-        : srcButton(w.file, w.line, lineLabel(w.file, w.line, w.compiled));
+        : srcButton(w.file);
       html +=
         '<div class="css-row"><span class="css-prop">' + escapeHtml(k) + '</span>: <span class="css-val">' +
         escapeHtml(w.value) + '</span> ' +
@@ -596,7 +592,7 @@
       });
       html +=
         '<div class="css-row"><span class="css-sel">' + escapeHtml(s.selector) + '</span> ' +
-        srcButton(s.file, s.line, lineLabel(s.file, s.line, s.compiled)) +
+        srcButton(s.file) +
         (props.length ? '<br><span class="css-val">' + escapeHtml(props.join('; ')) + '</span>' : '') +
         '</div>';
     });
@@ -692,10 +688,9 @@
    * element, and the id names the file they came from. Computed styles alone
    * cannot answer "where do I edit this" — this can.
    *
-   * Line numbers are located in the injected text because CSSOM exposes no
-   * positions. For a plain .css file that is the exact source line. For an SFC
-   * the injected text is the *compiled* style block, so the line is reported
-   * with a `~` as an offset into that block (the query in the dev id marks it).
+   * Only the file is reported, never a line number. The injected text is the
+   * *compiled* CSS (SCSS/Vue scoped/Tailwind/PostCSS), so a line counted there
+   * does not exist in the source file and would be actively misleading.
    */
   var MAX_TRACED_RULES = 20000;
   var MAX_TRACED_SOURCES = 8;
@@ -704,67 +699,6 @@
     var s = String(id);
     var q = s.indexOf('?');
     return q === -1 ? s : s.slice(0, q);
-  }
-
-  function escapeRegExp(s) {
-    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
-
-  /** Build a whitespace-tolerant pattern for a serialized selector. */
-  function selectorPattern(sel) {
-    var out = '';
-    var prevSpace = false;
-    for (var i = 0; i < sel.length; i++) {
-      var ch = sel.charAt(i);
-      if (/\s/.test(ch)) {
-        if (!prevSpace) out += '\\s+';
-        prevSpace = true;
-      } else if (ch === ',') {
-        out += ',\\s*';
-        prevSpace = false;
-      } else {
-        out += escapeRegExp(ch);
-        prevSpace = false;
-      }
-    }
-    return out;
-  }
-
-  function countNewlines(text, from, to) {
-    var n = 0;
-    for (var i = from; i < to; i++) if (text.charCodeAt(i) === 10) n++;
-    return n;
-  }
-
-  /**
-   * Blank out comments while preserving every offset and newline.
-   *
-   * Rule positions are found by searching the stylesheet text, and a selector
-   * mentioned in a comment (`the #save rule below …`) would otherwise be located
-   * instead of the real rule. Replacing comment characters with spaces keeps the
-   * line count and the column offsets intact.
-   */
-  function blankComments(text) {
-    return text.replace(/\/\*[\s\S]*?\*\//g, function (m) {
-      return m.replace(/[^\n]/g, ' ');
-    });
-  }
-
-  /** Locate a rule by selector, advancing a cursor so repeated selectors map in order. */
-  function locateRule(text, selectorText, cursor) {
-    if (!text) return null;
-    var pattern;
-    try {
-      pattern = new RegExp(selectorPattern(selectorText), 'g');
-    } catch (e) {
-      return null;
-    }
-    pattern.lastIndex = cursor.index;
-    var m = pattern.exec(text);
-    if (!m) return null;
-    cursor.line += countNewlines(text, cursor.index, m.index);
-    cursor.index = m.index + m[0].length;
-    return cursor.line;
   }
 
   /** Pseudo-elements cannot be matched by Element.matches(); drop them. */
@@ -848,20 +782,17 @@
     return a * 10000 + b * 100 + c;
   }
 
-  function walkSheet(rules, el, devId, text, cursor, bucket, active) {
+  function walkSheet(rules, el, devId, bucket, active) {
     for (var i = 0; i < rules.length; i++) {
       if (bucket.count >= MAX_TRACED_RULES) return;
       var rule = rules[i];
       if (rule.style && typeof rule.selectorText === 'string') {
         bucket.count++;
-        var line = locateRule(text, rule.selectorText, cursor);
         if (active && selectorMatches(el, rule.selectorText)) {
           var decls = readDeclarations(rule);
           if (Object.keys(decls).length) {
             bucket.list.push({
               file: stripDevQuery(devId),
-              line: line || null,
-              compiled: String(devId).indexOf('?') !== -1,
               selector: rule.selectorText,
               specificity: specificity(rule.selectorText),
               declarations: decls,
@@ -869,7 +800,7 @@
           }
         }
       } else if (rule.cssRules) {
-        walkSheet(rule.cssRules, el, devId, text, cursor, bucket, active && groupMatches(rule));
+        walkSheet(rule.cssRules, el, devId, bucket, active && groupMatches(rule));
       }
     }
   }
@@ -891,7 +822,7 @@
         continue; // cross-origin sheet: unreadable by design
       }
       if (!rules) continue;
-      walkSheet(rules, el, devId, blankComments(node.textContent || ''), { index: 0, line: 1 }, bucket, true);
+      walkSheet(rules, el, devId, bucket, true);
     }
 
     // Low specificity first, later rules last: the last write per property wins.
@@ -908,8 +839,6 @@
       Object.keys(entry.source.declarations).forEach(function (key) {
         winners[key] = {
           file: entry.source.file,
-          line: entry.source.line,
-          compiled: entry.source.compiled,
           selector: entry.source.selector,
           value: entry.source.declarations[key],
         };
@@ -1313,15 +1242,15 @@
       });
   }
 
-  /** Ask the Vite plugin to open a source file at the reported line. */
-  function openSource(file, line) {
+  /** Ask the Vite plugin to open a source file. */
+  function openSource(file) {
     if (!file) return;
-    var where = shortPath(file) + (line ? ':' + line : '');
+    var where = shortPath(file);
     setStatus('正在打开 ' + where + ' …');
     fetch(OPEN_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ file: file, line: line || null, column: 1 }),
+      body: JSON.stringify({ file: file }),
     })
       .then(function (r) {
         return r
@@ -1518,7 +1447,7 @@
     if (!btn) return;
     e.preventDefault();
     e.stopPropagation();
-    openSource(btn.getAttribute('data-file'), Number(btn.getAttribute('data-line')) || undefined);
+    openSource(btn.getAttribute('data-file'));
   });
   closeBtn.addEventListener('click', function () {
     panel.classList.remove('open');

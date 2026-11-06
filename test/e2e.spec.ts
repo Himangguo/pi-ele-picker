@@ -1,5 +1,4 @@
 import { test, expect, type Page } from '@playwright/test';
-import { readFileSync } from 'node:fs';
 
 /**
  * Regression tests for the browser client, driven through a real Vite dev server.
@@ -276,7 +275,7 @@ test('closing the panel also suppresses the reopen on reload', async ({ page }) 
   await expect(page.locator(TEXTAREA)).toHaveValue('关掉面板后刷新不该自己弹出来');
 });
 
-test('attributes a matched style to its Vite source and opens it on click', async ({ page }) => {
+test('attributes a matched style to its Vite source and opens the file on click', async ({ page }) => {
   const opened: Record<string, any>[] = [];
   await page.route('**/__pi_picker__/open', async (route) => {
     opened.push(route.request().postDataJSON());
@@ -285,22 +284,18 @@ test('attributes a matched style to its Vite source and opens it on click', asyn
   await open(page);
   await pick(page, '#save');
 
-  // app.css sets #save's background-color; the panel must name that file and the
-  // line of the matching rule, not just show the computed value.
+  // app.css sets #save's background-color; the panel names that file.
   const row = page.locator('.panel .css-row').filter({ hasText: 'background-color' }).first();
   await expect(row).toContainText('app.css');
-  // A selector mentioned in a comment must not win the line lookup; the chip has
-  // to point at the actual `#save {` rule, not the prose above it.
-  const expectedLine =
-    readFileSync('test/fixture/app.css', 'utf8')
-      .split('\n')
-      .findIndex((line) => line.trim() === '#save {') + 1;
-  expect(Number(await row.locator('button.src').getAttribute('data-line'))).toBe(expectedLine);
+
+  // No line numbers: Vite compiles CSS, so a line counted in the injected
+  // stylesheet would point at the wrong place in the source file.
+  expect(await row.locator('button.src').getAttribute('data-line')).toBeNull();
 
   await row.locator('button.src').click();
   await expect.poll(() => opened.length).toBe(1);
   expect(opened[0].file).toContain('app.css');
-  expect(opened[0].line).toBeGreaterThan(0);
+  expect(opened[0]).not.toHaveProperty('line');
 });
 
 test('the payload structure is one level deep and text is the element own', async ({ page }) => {
@@ -321,23 +316,26 @@ test('the payload structure is one level deep and text is the element own', asyn
   // The wrapper has no text of its own; neither child copy nor page copy leaks in.
   expect(el.text).toBeUndefined();
 
-  // And the CSS source for the card shipped with the payload.
+  // And the CSS source for the card shipped with the payload, without a line.
   expect(el.styleSources.some((s: any) => s.file.includes('app.css'))).toBe(true);
+  expect(el.styleSources.every((s: any) => s.line === undefined)).toBe(true);
 });
 
 test('the open endpoint refuses traversal and missing files', async ({ request }) => {
-  const missing = await request.post('/__pi_picker__/open', { data: { file: '/nope.css', line: 1 } });
+  const missing = await request.post('/__pi_picker__/open', { data: { file: '/nope.css' } });
   expect(missing.status()).toBe(404);
 
   // An existing file outside the project root must not be reachable.
   const traversal = await request.post('/__pi_picker__/open', {
-    data: { file: '/../../../../etc/passwd', line: 1 },
+    data: { file: '/../../../../etc/passwd' },
   });
   expect([403, 404]).toContain(traversal.status());
 
-  const ok = await request.post('/__pi_picker__/open', { data: { file: '/app.css', line: 2 } });
+  const ok = await request.post('/__pi_picker__/open', { data: { file: '/app.css' } });
   expect(ok.status()).toBe(200);
-  expect((await ok.json()).ok).toBe(true);
+  const body = await ok.json();
+  expect(body.ok).toBe(true);
+  expect(body.file).toContain('app.css');
 });
 
 test('a draft older than a day is discarded', async ({ page }) => {
