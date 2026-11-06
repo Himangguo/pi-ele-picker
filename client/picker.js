@@ -73,13 +73,8 @@
     '.panel.dragging .hd { cursor: grabbing; }',
     '.meta { padding: 8px 12px 0; color: #9a9aa5; font-size: 11px; line-height: 1.5; word-break: break-all; }',
     '.meta code { color: #a5b4fc; }',
+    '.meta .pg { margin-top: 2px; }',
     '.meta .comp { margin-top: 2px; }',
-    '.css { margin-top: 4px; display: flex; flex-direction: column; gap: 3px; }',
-    '.css-row { line-height: 1.45; }',
-    '.css-prop { color: #c4b5fd; }',
-    '.css-val { color: #e7e7ea; }',
-    '.css-sel { color: #a5b4fc; }',
-    '.css-inline { color: #9a9aa5; }',
     '.src { display: inline; background: transparent; border: none; padding: 0; margin: 0; color: #67e8f9; font-size: 11px; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; word-break: normal; }',
     '.src:hover { color: #a5f3fc; text-decoration-style: solid; }',
     'textarea { display: block; width: calc(100% - 24px); margin: 8px 12px 0; min-height: 72px; max-height: 200px; resize: vertical; background: #111218; color: #e7e7ea; border: 1px solid #34353d; border-radius: 8px; padding: 8px 10px; font-size: 13px; outline: none; }',
@@ -533,7 +528,7 @@
     // A new pick re-arms the draft: the user is working again, so a reload must
     // bring the panel back even if they closed it earlier.
     panelDismissed = false;
-    metaEl.innerHTML = metaHtml(targetSnapshot);
+    metaEl.innerHTML = metaHtml(targetSnapshot, targetUrl);
     openPanel();
     saveDraft();
     taEl.focus();
@@ -561,65 +556,31 @@
     return '<button' + attrs + ' title="' + escapeHtml(title) + '">' + escapeHtml(label || shortPath(file)) + '</button>';
   }
 
-  /** The winning Vite-source rule per tracked property, e.g. background-color <- .btn. */
-  function propRows(winners) {
-    var keys = [];
-    for (var i = 0; i < STYLE_KEYS.length; i++) if (winners[STYLE_KEYS[i]]) keys.push(STYLE_KEYS[i]);
-    if (!keys.length) return '';
-    var html = '<div class="css">';
-    keys.forEach(function (k) {
-      var w = winners[k];
-      var src = w.inline
-        ? '<span class="css-inline">内联样式</span>'
-        : srcButton(w.file);
-      html +=
-        '<div class="css-row"><span class="css-prop">' + escapeHtml(k) + '</span>: <span class="css-val">' +
-        escapeHtml(w.value) + '</span> ' +
-        src +
-        '</div>';
-    });
-    return html + '</div>';
-  }
-
-  /** Fallback for old snapshots that only carry the matched source list. */
-  function sourceRows(sources) {
-    if (!sources || !sources.length) return '';
-    var html = '<div class="css">';
-    sources.slice(0, 4).forEach(function (s) {
-      var props = [];
-      Object.keys(s.declarations || {}).forEach(function (k) {
-        if (props.length < 4) props.push(k + ': ' + s.declarations[k]);
-      });
-      html +=
-        '<div class="css-row"><span class="css-sel">' + escapeHtml(s.selector) + '</span> ' +
-        srcButton(s.file) +
-        (props.length ? '<br><span class="css-val">' + escapeHtml(props.join('; ')) + '</span>' : '') +
-        '</div>';
-    });
-    return html + '</div>';
-  }
-
-  function metaHtml(data) {
+  /**
+   * Panel meta: selector, the page the element lives on, and (for Vue) the
+   * component file. Styles are deliberately not listed here — the panel's job is
+   * to name the target, and the style sources still ship to the agent separately.
+   */
+  function metaHtml(data, pageUrl) {
     if (!data) return '';
     var html = '<code>' + escapeHtml(data.selector || '') + '</code>';
+    var url = pageUrl || data.url || location.href;
+    if (url) html += '<div class="pg">页面: <code>' + escapeHtml(url) + '</code></div>';
     if (data.componentFile) {
       html +=
         '<div class="comp">组件: ' +
         srcButton(
           data.componentFile,
-          null,
           (data.componentName ? data.componentName + ' ' : '') + shortPath(data.componentFile)
         ) +
         '</div>';
     }
-    if (data.styleWinners && Object.keys(data.styleWinners).length) html += propRows(data.styleWinners);
-    else if (data.styleSources && data.styleSources.length) html += sourceRows(data.styleSources);
     return html;
   }
 
   function renderMeta(el) {
     try {
-      metaEl.innerHTML = metaHtml(describe(el));
+      metaEl.innerHTML = metaHtml(describe(el), targetUrl || location.href);
     } catch (e) {
       metaEl.innerHTML = '<code>' + escapeHtml(cssPath(el)) + '</code>';
     }
@@ -1200,20 +1161,13 @@
 
     var el = targetSelector ? resolveTarget() : null;
     if (el) {
-      metaEl.innerHTML = targetSnapshot ? metaHtml(targetSnapshot) : '';
+      metaEl.innerHTML = targetSnapshot ? metaHtml(targetSnapshot, targetUrl || location.href) : '';
       if (!metaEl.innerHTML) renderMeta(el);
     } else if (targetSnapshot) {
       // Still sendable: the snapshot carries everything the bridge needs.
       metaEl.innerHTML =
-        '<code>' + escapeHtml(targetSelector || '') + '</code><br>' +
-        '上次选中的元素已不在页面中，发送时会带上抓取时的快照' +
-        (targetSnapshot.styleWinners || targetSnapshot.styleSources
-          ? '<div class="hint-css">' +
-            (targetSnapshot.styleWinners
-              ? propRows(targetSnapshot.styleWinners)
-              : sourceRows(targetSnapshot.styleSources)) +
-            '</div>'
-          : '');
+        metaHtml(targetSnapshot, targetUrl || location.href) +
+        '<br>上次选中的元素已不在页面中，发送时会带上抓取时的快照';
     }
 
     if (rec.dismissed) return;
@@ -1223,7 +1177,9 @@
     // composer so the draft is visibly still there, and let the next pick attach
     // it to a new element.
     panel.classList.add('open');
-    metaEl.textContent = '上次选中的元素已不在页面中，请重新点击选择';
+    metaEl.innerHTML =
+      '<div class="pg">页面: <code>' + escapeHtml(targetUrl || location.href) + '</code></div>' +
+      '上次选中的元素已不在页面中，请重新点击选择';
     positionPanel();
   }
 

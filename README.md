@@ -150,36 +150,49 @@ The same payload is available from the bridge directly:
 
 `/status` needs no token, but non-local browser origins get `403`, so an arbitrary website cannot probe session metadata. "Local" covers `localhost` / `*.localhost`, `127.0.0.0/8`, `0.0.0.0`, `[::1]`, and private or link-local IPv4 literals (`10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`, `169.254.x.x`) — so a dev server you open over your machine's LAN IPv4 address (Vite binds `0.0.0.0` by default) works, while an arbitrary site does not.
 
-### Style source tracing
+### What the panel shows
+
+The panel is deliberately small: it names the picked element and the page it came
+from, plus the Vue component file when one can be detected.
+
+```
+button#save
+页面: http://localhost:5173/settings
+组件: SaveButton src/components/SaveButton.vue
+```
+
+Style rows are not rendered. Listing computed properties next to the element did
+not help decide where to edit, and the subset was inconsistent across elements, so
+the panel leaves style inspection out. The computed styles still go to the agent in
+the payload (`element.styles`), and the matching style sources go with them (see
+below).
+
+### Style source tracing (agent payload)
 
 Computed styles answer *what* the element looks like; they cannot answer *where to
-edit it*. The picker goes one level deeper and reports **which source file the
-matching CSS rule came from**.
+edit it*. For the agent, the picker also reports **which source file the matching
+CSS rule came from**.
 
 Vite injects every dev stylesheet as `<style data-vite-dev-id="/src/...">`, and
 that id is the module URL. For the picked element the picker walks
 `document.styleSheets`, keeps only those Vite sheets, and tests each rule with
 `el.matches(rule.selectorText)` (following `@media` / `@supports` so a rule that
-does not currently apply is not attributed). The panel then shows, for every tracked
-property, the winning rule and a clickable file chip:
+does not currently apply is not attributed). The result ships as
+`styleSources` / `styleWinners`:
 
 ```
-background-color: #2563eb    src/components/Foo.vue
+- background-color: rgb(37,99,235)  ←  src/components/Foo.vue  (#save)
 ```
 
 Only the file is reported, never a line number. Vite compiles CSS (SCSS/Less, Vue
 scoped styles, Tailwind, PostCSS, inlined `@import`), so a line counted in the
 injected `<style>` would point at the wrong place in the source file. An inline
-`style="..."` declaration has no source file, so it is labelled `内联样式` instead of
-pointing at a rule that is not actually winning.
-
-The same information ships to the agent as `styleSources` / `styleWinners`, so a
-prompt like "把这个按钮改成主色" arrives with the exact file to open instead of 19
-computed values.
+`style="..."` declaration has no source file, so it is labelled `内联样式`.
 
 ### Open in editor
 
-Clicking a file chip asks the Vite plugin to open that file in your editor:
+The component file chip is clickable. It asks the Vite plugin to open that file in
+your editor:
 
 ```jsonc
 // POST /__pi_picker__/open

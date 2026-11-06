@@ -275,26 +275,36 @@ test('closing the panel also suppresses the reopen on reload', async ({ page }) 
   await expect(page.locator(TEXTAREA)).toHaveValue('关掉面板后刷新不该自己弹出来');
 });
 
-test('attributes a matched style to its Vite source and opens the file on click', async ({ page }) => {
+test('the panel shows the page URL and opens the component file', async ({ page }) => {
   const opened: Record<string, any>[] = [];
   await page.route('**/__pi_picker__/open', async (route) => {
     opened.push(route.request().postDataJSON());
     await route.fulfill({ json: { ok: true } });
   });
   await open(page);
+
+  // Stand in for a Vue SFC parent so the panel renders a component chip.
+  await page.evaluate(() => {
+    const el = document.querySelector('#save');
+    if (el) {
+      Object.defineProperty(el, '__vueParentComponent', {
+        value: { type: { __file: '/src/SaveButton.vue', name: 'SaveButton' }, parent: null },
+      });
+    }
+  });
   await pick(page, '#save');
 
-  // app.css sets #save's background-color; the panel names that file.
-  const row = page.locator('.panel .css-row').filter({ hasText: 'background-color' }).first();
-  await expect(row).toContainText('app.css');
+  // The panel names the element and the page it lives on...
+  await expect(page.locator(META)).toContainText('button#save');
+  await expect(page.locator(META)).toContainText('http://127.0.0.1:5273/');
+  // ...and no longer lists style rows; attribution is agent-only now.
+  await expect(page.locator('.panel .css-row')).toHaveCount(0);
 
-  // No line numbers: Vite compiles CSS, so a line counted in the injected
-  // stylesheet would point at the wrong place in the source file.
-  expect(await row.locator('button.src').getAttribute('data-line')).toBeNull();
-
-  await row.locator('button.src').click();
+  const chip = page.locator(META + ' button.src').first();
+  await expect(chip).toContainText('SaveButton');
+  await chip.click();
   await expect.poll(() => opened.length).toBe(1);
-  expect(opened[0].file).toContain('app.css');
+  expect(opened[0].file).toBe('/src/SaveButton.vue');
   expect(opened[0]).not.toHaveProperty('line');
 });
 
