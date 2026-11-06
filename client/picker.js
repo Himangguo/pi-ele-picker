@@ -566,9 +566,15 @@
     var html = '<code>' + escapeHtml(data.selector || '') + '</code>';
     var url = pageUrl || data.url || location.href;
     if (url) html += '<div class="pg">页面: <code>' + escapeHtml(url) + '</code></div>';
-    if (data.componentFile) {
+    if (data.pageFile) {
       html +=
-        '<div class="comp">组件: ' +
+        '<div class="comp">页面组件: ' +
+        srcButton(data.pageFile, (data.pageName ? data.pageName + ' ' : '') + shortPath(data.pageFile)) +
+        '</div>';
+    }
+    if (data.componentFile && data.componentFile !== data.pageFile) {
+      html +=
+        '<div class="comp">业务组件: ' +
         srcButton(
           data.componentFile,
           (data.componentName ? data.componentName + ' ' : '') + shortPath(data.componentFile)
@@ -635,6 +641,81 @@
         }
       }
       node = node.parentElement;
+    }
+    return {};
+  }
+
+  /** The nearest Vue component instance that owns (or contains) the element. */
+  function vueInstanceOf(el) {
+    var node = el;
+    while (node) {
+      if (node.__vueParentComponent) return node.__vueParentComponent;
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  function isUserComponentFile(file) {
+    if (!file) return false;
+    var s = String(file);
+    return s.indexOf('node_modules') === -1 && s.indexOf('virtual:') !== 0 && s.indexOf('\0') === -1;
+  }
+
+  /** `() => import('./Page.vue')` / `defineAsyncComponent` hide the file until resolved. */
+  function resolveRouteComponent(comp) {
+    if (!comp) return null;
+    if (comp.__file) return comp;
+    if (comp.__asyncResolved) return comp.__asyncResolved;
+    if (comp.default) return resolveRouteComponent(comp.default);
+    return null;
+  }
+
+  /**
+   * The page component for the current URL, via Vue Router's matched records.
+   *
+   * vue-router installs `$route` on the root app's `globalProperties`, so any
+   * picked element can reach it by walking its component parents to the root.
+   * `route.matched` is the decoded route chain for the current path; the deepest
+   * record is the page, while earlier ones are layouts / App shell.
+   */
+  function pageInfo(el) {
+    var inst = vueInstanceOf(el);
+    if (!inst) return {};
+    var root = inst;
+    while (root.parent) root = root.parent;
+    var gp = root.appContext && root.appContext.config && root.appContext.config.globalProperties;
+    if (!gp) return {};
+    var route = gp.$route;
+    if (!route) {
+      var router = gp.$router;
+      route = router && router.currentRoute && router.currentRoute.value;
+    }
+    if (!route || !route.matched || !route.matched.length) return {};
+
+    // Deepest matched record is the page; its parents are layouts / App shell.
+    for (var i = route.matched.length - 1; i >= 0; i--) {
+      var comp = route.matched[i] && route.matched[i].components && route.matched[i].components.default;
+      var resolved = resolveRouteComponent(comp);
+      if (resolved && isUserComponentFile(resolved.__file)) {
+        return { pageFile: resolved.__file, pageName: resolved.name || resolved.__name || '' };
+      }
+    }
+
+    // Lazy route: the record still holds the async wrapper, but the resolved
+    // page lives in the instance chain. Match it by identity.
+    var chain = [];
+    for (var c = inst; c; c = c.parent) chain.push(c);
+    for (var r = route.matched.length - 1; r >= 0; r--) {
+      var raw = route.matched[r] && route.matched[r].components && route.matched[r].components.default;
+      if (!raw) continue;
+      var asyncResolved = raw.__asyncResolved;
+      for (var j = 0; j < chain.length; j++) {
+        var type = chain[j].type;
+        if (!type) continue;
+        if ((type === raw || type === asyncResolved) && isUserComponentFile(type.__file)) {
+          return { pageFile: type.__file, pageName: type.name || type.__name || '' };
+        }
+      }
     }
     return {};
   }
@@ -875,6 +956,7 @@
     if (!el) return undefined;
     var r = el.getBoundingClientRect();
     var v = vueInfo(el);
+    var page = pageInfo(el);
     var trace = styleTrace(el);
     // A `style="..."` declaration beats any stylesheet rule and has no source
     // file. Say so instead of pointing at a rule that is not actually winning.
@@ -908,6 +990,8 @@
       styles: stylesOf(el),
       componentFile: v.componentFile,
       componentName: v.componentName,
+      pageFile: page.pageFile,
+      pageName: page.pageName,
       styleSources: trace.sources,
       styleWinners: winners,
     };

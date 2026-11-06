@@ -211,6 +211,9 @@ interface PickElement {
   styles?: Record<string, string>;
   componentFile?: string;
   componentName?: string;
+  /** Vue Router's page component for the current URL (deepest matched record). */
+  pageFile?: string;
+  pageName?: string;
   /** Matched Vite stylesheet rules, most specific first. */
   styleSources?: Array<{
     file?: string;
@@ -294,7 +297,10 @@ function compose(payload: PickPayload, imagePaths: string[]): string {
   const lines: string[] = [];
   lines.push('【element picker】请在前端页面中按以下信息完成修改：');
   if (payload.url) lines.push(`页面: ${payload.url}`);
-  if (el.componentFile) lines.push(`组件: ${el.componentName || '(anonymous)'}  ${el.componentFile}`);
+  if (el.pageFile) lines.push(`页面组件: ${el.pageName || '(anonymous)'}  ${el.pageFile}`);
+  if (el.componentFile && el.componentFile !== el.pageFile) {
+    lines.push(`业务组件: ${el.componentName || '(anonymous)'}  ${el.componentFile}`);
+  }
   if (el.selector) lines.push(`选择器: ${el.selector}`);
   const shorthand =
     (el.tag ?? '') +

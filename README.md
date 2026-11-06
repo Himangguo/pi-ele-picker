@@ -158,8 +158,15 @@ from, plus the Vue component file when one can be detected.
 ```
 button#save
 页面: http://localhost:5173/settings
-组件: SaveButton src/components/SaveButton.vue
+页面组件: Settings views/Settings.vue
+业务组件: UserCard components/UserCard.vue
 ```
+
+The page component is resolved from Vue Router's `$route.matched` for the current
+URL: the deepest matched record is the page, while earlier records are layouts /
+the App shell. It therefore reflects the path even for an element outside the
+page's own subtree (a global header, for example). If no Vue Router is present,
+the panel falls back to the nearest component file. Both file chips are clickable.
 
 Style rows are not rendered. Listing computed properties next to the element did
 not help decide where to edit, and the subset was inconsistent across elements, so
@@ -191,8 +198,8 @@ injected `<style>` would point at the wrong place in the source file. An inline
 
 ### Open in editor
 
-The component file chip is clickable. It asks the Vite plugin to open that file in
-your editor:
+The page / component file chips are clickable. They ask the Vite plugin to open
+that file in your editor:
 
 ```jsonc
 // POST /__pi_picker__/open

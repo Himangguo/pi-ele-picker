@@ -275,7 +275,7 @@ test('closing the panel also suppresses the reopen on reload', async ({ page }) 
   await expect(page.locator(TEXTAREA)).toHaveValue('关掉面板后刷新不该自己弹出来');
 });
 
-test('the panel shows the page URL and opens the component file', async ({ page }) => {
+test('the panel shows the page URL, page component, and opens them', async ({ page }) => {
   const opened: Record<string, any>[] = [];
   await page.route('**/__pi_picker__/open', async (route) => {
     opened.push(route.request().postDataJSON());
@@ -283,29 +283,58 @@ test('the panel shows the page URL and opens the component file', async ({ page 
   });
   await open(page);
 
-  // Stand in for a Vue SFC parent so the panel renders a component chip.
+  // Stand in for a Vue app: the element lives in UserCard, rendered by the
+  // Settings page that vue-router matched for the current URL.
   await page.evaluate(() => {
     const el = document.querySelector('#save');
     if (el) {
       Object.defineProperty(el, '__vueParentComponent', {
-        value: { type: { __file: '/src/SaveButton.vue', name: 'SaveButton' }, parent: null },
+        value: {
+          type: { __file: '/src/components/UserCard.vue', name: 'UserCard' },
+          parent: {
+            type: { __file: '/src/views/Settings.vue', name: 'Settings' },
+            parent: {
+              appContext: {
+                config: {
+                  globalProperties: {
+                    $route: {
+                      matched: [
+                        { components: { default: { __file: '/src/App.vue', name: 'App' } } },
+                        { components: { default: { __file: '/src/views/Settings.vue', name: 'Settings' } } },
+                      ],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
       });
     }
   });
   await pick(page, '#save');
 
-  // The panel names the element and the page it lives on...
   await expect(page.locator(META)).toContainText('button#save');
   await expect(page.locator(META)).toContainText('http://127.0.0.1:5273/');
-  // ...and no longer lists style rows; attribution is agent-only now.
+  await expect(page.locator(META)).toContainText('页面组件: Settings views/Settings.vue');
+  await expect(page.locator(META)).toContainText('业务组件: UserCard components/UserCard.vue');
+  // Style attribution is agent-only now; the panel must not render style rows.
   await expect(page.locator('.panel .css-row')).toHaveCount(0);
 
-  const chip = page.locator(META + ' button.src').first();
-  await expect(chip).toContainText('SaveButton');
-  await chip.click();
+  // The first chip is the page component from the matched route.
+  const pageChip = page.locator(META + ' button.src').first();
+  await expect(pageChip).toContainText('Settings');
+  await pageChip.click();
   await expect.poll(() => opened.length).toBe(1);
-  expect(opened[0].file).toBe('/src/SaveButton.vue');
+  expect(opened[0].file).toBe('/src/views/Settings.vue');
   expect(opened[0]).not.toHaveProperty('line');
+
+  // The nearest component stays available as a second chip.
+  const componentChip = page.locator(META + ' button.src').nth(1);
+  await expect(componentChip).toContainText('UserCard');
+  await componentChip.click();
+  await expect.poll(() => opened.length).toBe(2);
+  expect(opened[1].file).toBe('/src/components/UserCard.vue');
 });
 
 test('the payload structure is one level deep and text is the element own', async ({ page }) => {
